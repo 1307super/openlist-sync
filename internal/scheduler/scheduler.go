@@ -62,26 +62,7 @@ func (s *Scheduler) StartTask(taskID int64, intervalSec int64) {
 		for {
 			select {
 			case <-ticker.C:
-				s.mu.Lock()
-				isRunning := s.running[taskID]
-				s.mu.Unlock()
-
-				if isRunning {
-					log.Printf("[scheduler] task %d already running, skipping", taskID)
-					continue
-				}
-
-				s.mu.Lock()
-				s.running[taskID] = true
-				s.mu.Unlock()
-
-				log.Printf("[scheduler] running task %d", taskID)
-				s.engine.RunSync(taskID)
-
-				s.mu.Lock()
-				s.running[taskID] = false
-				s.mu.Unlock()
-
+				s.runSyncSafe(taskID)
 			case <-stopCh:
 				return
 			}
@@ -89,6 +70,59 @@ func (s *Scheduler) StartTask(taskID int64, intervalSec int64) {
 	}()
 
 	log.Printf("[scheduler] task %d scheduled every %ds", taskID, intervalSec)
+}
+
+// runSyncSafe runs a sync with panic recovery and proper running flag cleanup.
+func (s *Scheduler) runSyncSafe(taskID int64) {
+	s.mu.Lock()
+	isRunning := s.running[taskID]
+	s.mu.Unlock()
+
+	if isRunning {
+		log.Printf("[scheduler] task %d already running, skipping", taskID)
+		return
+	}
+
+	s.mu.Lock()
+	s.running[taskID] = true
+	s.mu.Unlock()
+
+	// Panic recovery ensures running flag is always reset
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[scheduler] PANIC in task %d: %v", taskID, r)
+			}
+			s.mu.Lock()
+			s.running[taskID] = false
+			s.mu.Unlock()
+		}()
+		log.Printf("[scheduler] running task %d", taskID)
+		s.engine.RunSync(taskID)
+	}()
+}
+
+// TriggerSync triggers an immediate sync for a task.
+// Returns false if the task is already running.
+// This is the unified entry point — both scheduler and API handlers use this.
+func (s *Scheduler) TriggerSync(taskID int64) bool {
+	s.mu.Lock()
+	isRunning := s.running[taskID]
+	s.mu.Unlock()
+
+	if isRunning {
+		return false
+	}
+
+	go s.runSyncSafe(taskID)
+	return true
+}
+
+// IsRunning returns whether a task is currently running.
+func (s *Scheduler) IsRunning(taskID int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running[taskID]
 }
 
 func (s *Scheduler) StopTask(taskID int64) {

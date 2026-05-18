@@ -181,9 +181,9 @@ func (c *Client) ListDirs(path string) (*ListResponse, error) {
 	}
 
 	var raw struct {
-		Code int         `json:"code"`
-		Data []FileInfo  `json:"data"`
-		Msg  string      `json:"message"`
+		Code int        `json:"code"`
+		Data []FileInfo `json:"data"`
+		Msg  string     `json:"message"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, err
@@ -199,7 +199,7 @@ func (c *Client) ListDirs(path string) (*ListResponse, error) {
 	return &ListResponse{Content: raw.Data, Total: len(raw.Data)}, nil
 }
 
-func (c *Client) Copy(srcDir, dstDir string, names []string, overwrite, skipExisting bool) (string, error) {
+func (c *Client) SubmitCopy(srcDir, dstDir string, names []string, overwrite, skipExisting bool) error {
 	payload := map[string]interface{}{
 		"src_dir":       srcDir,
 		"dst_dir":       dstDir,
@@ -209,23 +209,20 @@ func (c *Client) Copy(srcDir, dstDir string, names []string, overwrite, skipExis
 	}
 	data, code, err := c.doRequestWithRetries("POST", "/api/fs/copy", payload, 2)
 	if err != nil {
-		return "", err
+		return fmt.Errorf("copy request: %w", err)
 	}
 
 	var result struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
-		Data    struct {
-			TaskID string `json:"task_id"`
-		} `json:"data"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
-		return "", err
+		return fmt.Errorf("parse copy response: %w", err)
 	}
 	if code != 200 || result.Code != 200 {
-		return "", fmt.Errorf("copy failed: %s (http %d, code %d)", result.Message, code, result.Code)
+		return fmt.Errorf("copy failed: %s (http %d, code %d)", result.Message, code, result.Code)
 	}
-	return result.Data.TaskID, nil
+	return nil
 }
 
 func (c *Client) Remove(dir string, names []string) error {
@@ -244,24 +241,34 @@ func (c *Client) Remove(dir string, names []string) error {
 }
 
 type CopyTaskInfo struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	State   int    `json:"state"`
-	Progress float64 `json:"progress"`
-	Error   string `json:"error"`
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	State      int     `json:"state"`
+	Status     string  `json:"status"`
+	Progress   float64 `json:"progress"`
+	TotalBytes int64   `json:"total_bytes"`
+	Error      string  `json:"error"`
 }
 
 func (c *Client) GetCopyTasks() ([]CopyTaskInfo, error) {
-	data, code, err := c.doRequestWithRetries("GET", "/api/task/copy/undone", nil, 2)
+	return c.fetchCopyTasks("/api/task/copy/undone")
+}
+
+func (c *Client) GetCopyDoneTasks() ([]CopyTaskInfo, error) {
+	return c.fetchCopyTasks("/api/task/copy/done")
+}
+
+func (c *Client) fetchCopyTasks(endpoint string) ([]CopyTaskInfo, error) {
+	data, code, err := c.doRequestWithRetries("GET", endpoint, nil, 2)
 	if err != nil {
 		return nil, err
 	}
 	if code != 200 {
-		return nil, fmt.Errorf("get copy tasks: status %d", code)
+		return nil, fmt.Errorf("get copy tasks %s: status %d", endpoint, code)
 	}
 
 	var result struct {
-		Code int           `json:"code"`
+		Code int            `json:"code"`
 		Data []CopyTaskInfo `json:"data"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
@@ -270,34 +277,58 @@ func (c *Client) GetCopyTasks() ([]CopyTaskInfo, error) {
 	return result.Data, nil
 }
 
-func (c *Client) WaitForCopy(taskID string, interval time.Duration, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+func (c *Client) WaitForCopy(taskID string, interval time.Duration) error {
+	appeared := false
+	consecutiveNetErrors := 0
+	staleCount := 0
+	startTime := time.Now()
+	const maxNetErrors = 2
+	const maxStale = 720
+	const instantCompleteWait = 60 * time.Second
+
+	for {
 		tasks, err := c.GetCopyTasks()
 		if err != nil {
-			return err
+			consecutiveNetErrors++
+			if consecutiveNetErrors >= maxNetErrors {
+				return fmt.Errorf("GetCopyTasks failed %d times: %w", consecutiveNetErrors, err)
+			}
+			time.Sleep(interval)
+			continue
 		}
+		consecutiveNetErrors = 0
+
 		found := false
 		for _, t := range tasks {
 			if t.ID == taskID {
 				found = true
+				appeared = true
+				staleCount++
 				if t.State == 3 {
 					if t.Error != "" {
 						return fmt.Errorf("copy task error: %s", t.Error)
 					}
-				}
-				if t.State == 2 {
-					return nil
+					return fmt.Errorf("copy task cancelled or failed (state=3)")
 				}
 				break
 			}
 		}
+
 		if !found {
-			return nil
+			if appeared {
+				return nil
+			}
+			if time.Since(startTime) >= instantCompleteWait {
+				return nil
+			}
+		} else {
+			if staleCount > maxStale {
+				return fmt.Errorf("copy task stuck for over 2 hours")
+			}
 		}
+
 		time.Sleep(interval)
 	}
-	return fmt.Errorf("copy timeout after %v", timeout)
 }
 
 func (c *Client) TestConnection() error {
@@ -311,6 +342,7 @@ func (c *Client) TestConnection() error {
 // FileEntry holds a file's relative path from the scan root.
 type FileEntry struct {
 	RelPath string
+	Size    int64
 }
 
 // ScanAllFilesRecursive recursively scans dirPath and returns all files
@@ -338,7 +370,7 @@ func (c *Client) ScanAllFilesRecursive(dirPath string) ([]FileEntry, error) {
 						return err
 					}
 				} else {
-					entries = append(entries, FileEntry{RelPath: rel})
+					entries = append(entries, FileEntry{RelPath: rel, Size: f.Size})
 				}
 			}
 			if resp.Total <= perPage*page {

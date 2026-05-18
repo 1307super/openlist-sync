@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 var migrations = []string{
@@ -51,6 +52,7 @@ var migrations = []string{
 		completed_at INTEGER
 	)`,
 	`CREATE INDEX IF NOT EXISTS copy_jobs_task_status_idx ON copy_jobs(task_id, status)`,
+	`ALTER TABLE sync_tasks ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'exact'`,
 }
 
 func InitDB(dbPath string) (*sql.DB, error) {
@@ -61,9 +63,15 @@ func InitDB(dbPath string) (*sql.DB, error) {
 
 	for _, m := range migrations {
 		if _, err := db.Exec(m); err != nil {
-			return nil, fmt.Errorf("migration: %w", err)
+			if !isDuplicateColumn(err) {
+				return nil, fmt.Errorf("migration: %w", err)
+			}
 		}
 	}
 
 	return db, nil
+}
+
+func isDuplicateColumn(err error) bool {
+	return strings.Contains(err.Error(), "duplicate column name")
 }

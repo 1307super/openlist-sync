@@ -44,7 +44,7 @@ func main() {
 	client := openlist.NewClient(db)
 	engine := syncengine.NewEngine(db, client)
 	sched := scheduler.NewScheduler(db, engine)
-	handlers := api.NewHandlers(db, client, engine)
+	handlers := api.NewHandlers(db, client, engine, sched)
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()

@@ -7,6 +7,7 @@ import type {
   TestConnectionResult,
   SyncCycleResult,
   PaginatedResponse,
+  SyncProgress,
 } from "../types";
 
 const BASE = "/api";
@@ -70,7 +71,6 @@ export const browseApi = {
     request<BrowseResponse>("POST", "/browse/dirs", { path }),
 };
 
-// Sync API
 export const syncApi = {
   status: () =>
     request<{
@@ -82,4 +82,6 @@ export const syncApi = {
         lastSyncAt: string | null;
       }>;
     }>("GET", "/sync/status"),
+  progress: (taskId: number) =>
+    request<SyncProgress>("GET", `/tasks/${taskId}/progress`),
 };

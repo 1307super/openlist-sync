@@ -12,6 +12,7 @@ type SyncTask struct {
 	DestPath        string
 	CompletionRule  string
 	ReplaceRule     string
+	MatchMode       string
 	ScanIntervalSec int64
 	Enabled         bool
 	Status          string
@@ -29,6 +30,7 @@ type SyncTaskJSON struct {
 	DestPath        string  `json:"destPath"`
 	CompletionRule  string  `json:"completionRule"`
 	ReplaceRule     string  `json:"replaceRule"`
+	MatchMode       string  `json:"matchMode"`
 	ScanIntervalSec int64   `json:"scanIntervalSec"`
 	Enabled         bool    `json:"enabled"`
 	Status          string  `json:"status"`
@@ -45,6 +47,7 @@ type TaskCreateRequest struct {
 	DestPath        *string `json:"destPath"`
 	CompletionRule  *string `json:"completionRule"`
 	ReplaceRule     *string `json:"replaceRule"`
+	MatchMode       *string `json:"matchMode"`
 	ScanIntervalSec *int64  `json:"scanIntervalSec"`
 	Enabled         *bool   `json:"enabled"`
 }
@@ -57,6 +60,7 @@ func (t *SyncTask) ToJSON() SyncTaskJSON {
 		DestPath:        t.DestPath,
 		CompletionRule:  t.CompletionRule,
 		ReplaceRule:     t.ReplaceRule,
+		MatchMode:       t.MatchMode,
 		ScanIntervalSec: t.ScanIntervalSec,
 		Enabled:         t.Enabled,
 		Status:          t.Status,
@@ -197,7 +201,7 @@ func scanTask(row interface{ Scan(...interface{}) error }) (*SyncTask, error) {
 	var enabled int64
 	err := row.Scan(
 		&t.ID, &t.Name, &t.SourcePath, &t.DestPath,
-		&t.CompletionRule, &t.ReplaceRule, &t.ScanIntervalSec,
+		&t.CompletionRule, &t.ReplaceRule, &t.MatchMode, &t.ScanIntervalSec,
 		&enabled, &t.Status, &t.LastScanAt, &t.LastSyncAt,
 		&t.Error, &t.CreatedAt, &t.UpdatedAt,
 	)
@@ -209,7 +213,7 @@ func scanTask(row interface{ Scan(...interface{}) error }) (*SyncTask, error) {
 }
 
 func GetAllTasks(db *sql.DB) ([]SyncTask, error) {
-	rows, err := db.Query(`SELECT id, name, source_path, dest_path, completion_rule, replace_rule,
+	rows, err := db.Query(`SELECT id, name, source_path, dest_path, completion_rule, replace_rule, match_mode,
 		scan_interval_sec, enabled, status, last_scan_at, last_sync_at, error, created_at, updated_at
 		FROM sync_tasks ORDER BY id`)
 	if err != nil {
@@ -229,7 +233,7 @@ func GetAllTasks(db *sql.DB) ([]SyncTask, error) {
 }
 
 func GetTaskByID(db *sql.DB, id int64) (*SyncTask, error) {
-	row := db.QueryRow(`SELECT id, name, source_path, dest_path, completion_rule, replace_rule,
+	row := db.QueryRow(`SELECT id, name, source_path, dest_path, completion_rule, replace_rule, match_mode,
 		scan_interval_sec, enabled, status, last_scan_at, last_sync_at, error, created_at, updated_at
 		FROM sync_tasks WHERE id = ?`, id)
 	return scanTask(row)
@@ -242,12 +246,13 @@ func CreateTask(db *sql.DB, req TaskCreateRequest) (*SyncTask, error) {
 	destPath := valStr(req.DestPath, "")
 	completionRule := valStr(req.CompletionRule, "keep")
 	replaceRule := valStr(req.ReplaceRule, "skip")
+	matchMode := valStr(req.MatchMode, "exact")
 	scanInterval := valInt64(req.ScanIntervalSec, 300)
 
 	res, err := db.Exec(`INSERT INTO sync_tasks
-		(name, source_path, dest_path, completion_rule, replace_rule, scan_interval_sec, enabled, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, 1, 'idle', ?, ?)`,
-		name, sourcePath, destPath, completionRule, replaceRule, scanInterval, now, now)
+		(name, source_path, dest_path, completion_rule, replace_rule, match_mode, scan_interval_sec, enabled, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'idle', ?, ?)`,
+		name, sourcePath, destPath, completionRule, replaceRule, matchMode, scanInterval, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -267,6 +272,7 @@ func UpdateTask(db *sql.DB, id int64, req TaskCreateRequest) (*SyncTask, error) 
 	destPath := existing.DestPath
 	completionRule := existing.CompletionRule
 	replaceRule := existing.ReplaceRule
+	matchMode := existing.MatchMode
 	scanInterval := existing.ScanIntervalSec
 
 	if req.Name != nil {
@@ -284,13 +290,16 @@ func UpdateTask(db *sql.DB, id int64, req TaskCreateRequest) (*SyncTask, error) 
 	if req.ReplaceRule != nil {
 		replaceRule = *req.ReplaceRule
 	}
+	if req.MatchMode != nil {
+		matchMode = *req.MatchMode
+	}
 	if req.ScanIntervalSec != nil {
 		scanInterval = *req.ScanIntervalSec
 	}
 
 	_, err = db.Exec(`UPDATE sync_tasks SET name=?, source_path=?, dest_path=?,
-		completion_rule=?, replace_rule=?, scan_interval_sec=?, updated_at=? WHERE id=?`,
-		name, sourcePath, destPath, completionRule, replaceRule, scanInterval, now, id)
+		completion_rule=?, replace_rule=?, match_mode=?, scan_interval_sec=?, updated_at=? WHERE id=?`,
+		name, sourcePath, destPath, completionRule, replaceRule, matchMode, scanInterval, now, id)
 	if err != nil {
 		return nil, err
 	}
@@ -408,7 +417,7 @@ func IncrementCopyJobRetry(db *sql.DB, id int64) error {
 }
 
 func GetEnabledTasks(db *sql.DB) ([]SyncTask, error) {
-	rows, err := db.Query(`SELECT id, name, source_path, dest_path, completion_rule, replace_rule,
+	rows, err := db.Query(`SELECT id, name, source_path, dest_path, completion_rule, replace_rule, match_mode,
 		scan_interval_sec, enabled, status, last_scan_at, last_sync_at, error, created_at, updated_at
 		FROM sync_tasks WHERE enabled = 1`)
 	if err != nil {

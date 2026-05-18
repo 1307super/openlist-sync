@@ -14,11 +14,11 @@ import (
 )
 
 type Bot struct {
-	api       *tgbotapi.BotAPI
-	db        *sql.DB
-	engine    *syncengine.Engine
-	chatID    int64
-	sessions  map[int64]*createSession
+	api        *tgbotapi.BotAPI
+	db         *sql.DB
+	engine     *syncengine.Engine
+	chatID     int64
+	sessions   map[int64]*createSession
 	sessionsMu stdsync.Mutex
 }
 
@@ -87,7 +87,7 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 
 	switch cmd {
 	case "/start":
-		b.send(chatID, "OpenList 同步机器人\n\n命令列表：\n/tasks - 任务列表\n/task <id> - 任务详情\n/create [名称 源路径 目标路径] - 创建任务\n/delete <id> - 删除任务\n/start_task <id> - 启动任务\n/stop_task <id> - 停止任务\n/trigger <id> - 立即同步\n/logs <id> - 最近日志\n/settings - 查看设置")
+		b.send(chatID, "OpenList 同步机器人\n\n命令列表：\n/tasks - 任务列表\n/task <id> - 任务详情\n/create [名称 源路径 目标路径 [smart]] - 创建任务\n/delete <id> - 删除任务\n/start_task <id> - 启动任务\n/stop_task <id> - 停止任务\n/trigger <id> - 立即同步\n/logs <id> - 最近日志\n/settings - 查看设置")
 
 	case "/tasks":
 		b.handleTasks(chatID)
@@ -163,18 +163,23 @@ func (b *Bot) handleCreate(chatID int64, args []string) {
 		name := args[0]
 		src := args[1]
 		dst := args[2]
+		matchMode := "exact"
+		if len(args) >= 4 && (args[3] == "smart" || args[3] == "exact") {
+			matchMode = args[3]
+		}
 		req := database.TaskCreateRequest{
 			Name:       &name,
 			SourcePath: &src,
 			DestPath:   &dst,
+			MatchMode:  &matchMode,
 		}
 		task, err := database.CreateTask(b.db, req)
 		if err != nil {
 			b.send(chatID, fmt.Sprintf("创建失败: %v", err))
 			return
 		}
-		b.send(chatID, fmt.Sprintf("任务已创建：\n#%d %s\n%s → %s\n完成规则: 保留文件\n替换规则: 跳过已存在\n扫描间隔: 300s",
-			task.ID, task.Name, task.SourcePath, task.DestPath))
+		b.send(chatID, fmt.Sprintf("任务已创建：\n#%d %s\n%s → %s\n完成规则: 保留文件\n替换规则: 跳过已存在\n匹配模式: %s\n扫描间隔: 300s",
+			task.ID, task.Name, task.SourcePath, task.DestPath, matchModeLabel(task.MatchMode)))
 		return
 	}
 
@@ -211,7 +216,7 @@ func (b *Bot) handleCreateStep(chatID int64, session *createSession, text string
 			b.send(chatID, fmt.Sprintf("创建失败: %v", err))
 			return
 		}
-		b.send(chatID, fmt.Sprintf("任务已创建：\n#%d %s\n%s → %s\n完成规则: 保留文件\n替换规则: 跳过已存在\n扫描间隔: 300s",
+		b.send(chatID, fmt.Sprintf("任务已创建：\n#%d %s\n%s → %s\n完成规则: 保留文件\n替换规则: 跳过已存在\n匹配模式: 精确匹配\n扫描间隔: 300s",
 			task.ID, task.Name, task.SourcePath, task.DestPath))
 	}
 }
@@ -332,9 +337,9 @@ func (b *Bot) handleTaskDetail(chatID int64, idStr string) {
 	}
 
 	tj := task.ToJSON()
-	text := fmt.Sprintf("任务 #%d: %s\n源路径: %s\n目标路径: %s\n状态: %s\n完成规则: %s\n替换规则: %s\n扫描间隔: %ds",
+	text := fmt.Sprintf("任务 #%d: %s\n源路径: %s\n目标路径: %s\n状态: %s\n完成规则: %s\n替换规则: %s\n匹配模式: %s\n扫描间隔: %ds",
 		tj.ID, tj.Name, tj.SourcePath, tj.DestPath, statusLabel(tj.Status),
-		completionRuleLabel(tj.CompletionRule), replaceRuleLabel(tj.ReplaceRule), tj.ScanIntervalSec)
+		completionRuleLabel(tj.CompletionRule), replaceRuleLabel(tj.ReplaceRule), matchModeLabel(tj.MatchMode), tj.ScanIntervalSec)
 
 	if tj.LastSyncAt != nil {
 		text += fmt.Sprintf("\n上次同步: %s", *tj.LastSyncAt)
@@ -394,6 +399,17 @@ func replaceRuleLabel(rule string) string {
 		return "覆盖已存在"
 	default:
 		return rule
+	}
+}
+
+func matchModeLabel(mode string) string {
+	switch mode {
+	case "smart":
+		return "追更匹配"
+	case "exact":
+		return "精确匹配"
+	default:
+		return mode
 	}
 }
 

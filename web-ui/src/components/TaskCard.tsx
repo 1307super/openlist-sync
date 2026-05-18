@@ -8,6 +8,7 @@ import {
   Timer,
   Clock,
 } from "lucide-react";
+import { useSyncProgress } from "../hooks/useSyncProgress";
 import type { SyncTask } from "../types";
 
 interface TaskCardProps {
@@ -50,12 +51,67 @@ function formatInterval(seconds: number): string {
   return `每 ${hr} 小时`;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  let size = bytes;
+  while (size >= 1024 && i < units.length - 1) {
+    size /= 1024;
+    i++;
+  }
+  return ` ${size.toFixed(1)}${units[i]}`;
+}
+
 const statusStyles: Record<SyncTask["status"], string> = {
   idle: "bg-green-500/15 text-green-400",
   running: "bg-blue-500/20 text-blue-400",
   paused: "bg-yellow-500/20 text-yellow-400",
   error: "bg-red-500/20 text-red-400",
 };
+
+function ProgressSection({ task }: { task: SyncTask }) {
+  const progress = useSyncProgress(task.id, task.status === "running");
+
+  if (!progress || !progress.running || !progress.copyTasks?.length) {
+    if (task.status === "running") {
+      return (
+        <div className="mt-2 text-xs text-blue-400 flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+          正在扫描文件...
+        </div>
+      );
+    }
+    return null;
+  }
+
+  const active = progress.copyTasks[0];
+  const pct = Math.round(active.progress || 0);
+
+  return (
+    <div className="mt-2 space-y-1.5">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-slate-400 truncate mr-2">
+          {active.name || active.status || "复制中"}
+        </span>
+        <span className="text-blue-400 shrink-0">
+          {pct}%{formatBytes(active.totalBytes)}
+        </span>
+      </div>
+      <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
+        <div
+          className="h-full bg-blue-500 rounded-full transition-all duration-1000 ease-out"
+          style={{ width: `${Math.max(pct, 2)}%` }}
+        />
+      </div>
+      {progress.taskCount > 1 && (
+        <div className="text-xs text-slate-500">
+          共 {progress.taskCount} 个复制任务进行中
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function TaskCard({
   task,
@@ -96,7 +152,9 @@ export default function TaskCard({
         </div>
       </div>
 
-      <div className="flex items-center gap-4 text-xs text-slate-500 mb-3">
+      <ProgressSection task={task} />
+
+      <div className="flex items-center gap-4 text-xs text-slate-500 mt-3">
         <span className="flex items-center gap-1">
           <Clock className="w-3.5 h-3.5" />
           {formatRelative(task.lastSyncAt)}
@@ -112,7 +170,7 @@ export default function TaskCard({
         )}
       </div>
 
-      <div className="flex items-center gap-1.5 flex-wrap">
+      <div className="flex items-center gap-1.5 flex-wrap mt-3">
         {isRunning ? (
           <button
             onClick={() => onStop(task.id)}

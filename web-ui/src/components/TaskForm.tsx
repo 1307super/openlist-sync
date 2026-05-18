@@ -25,6 +25,9 @@ export default function TaskForm({
   const [replaceRule, setReplaceRule] = useState<SyncTask["replaceRule"]>(
     task?.replaceRule ?? "skip"
   );
+  const [matchMode, setMatchMode] = useState<SyncTask["matchMode"]>(
+    task?.matchMode ?? "exact"
+  );
   const [scanIntervalSec, setScanIntervalSec] = useState(
     task?.scanIntervalSec ?? 300
   );
@@ -51,6 +54,7 @@ export default function TaskForm({
       destPath: destPath.trim(),
       completionRule,
       replaceRule,
+      matchMode,
       scanIntervalSec,
       enabled: task?.enabled ?? true,
     });
@@ -244,6 +248,53 @@ export default function TaskForm({
                   覆盖已存在文件
                 </label>
               </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                匹配模式
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <label
+                  className={`${radioCard} ${
+                    matchMode === "exact"
+                      ? "border-primary bg-primary/10 text-white"
+                      : "border-slate-700 text-slate-400 hover:border-slate-600"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="matchMode"
+                    value="exact"
+                    checked={matchMode === "exact"}
+                    onChange={() => setMatchMode("exact")}
+                    className="sr-only"
+                  />
+                  精确匹配
+                </label>
+                <label
+                  className={`${radioCard} ${
+                    matchMode === "smart"
+                      ? "border-primary bg-primary/10 text-white"
+                      : "border-slate-700 text-slate-400 hover:border-slate-600"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="matchMode"
+                    value="smart"
+                    checked={matchMode === "smart"}
+                    onChange={() => setMatchMode("smart")}
+                    className="sr-only"
+                  />
+                  追更匹配
+                </label>
+              </div>
+              <p className="mt-1.5 text-xs text-slate-500">
+                {matchMode === "smart"
+                  ? "源文件名为 S01E01.mkv 格式时，通过剧集编号匹配目标（如 adb.S01E01.1080P.mkv）"
+                  : "仅通过完整文件名匹配"}
+              </p>
             </div>
 
             <div>

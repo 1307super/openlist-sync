@@ -2,8 +2,10 @@ package sync
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
+	stdsync "sync"
 	"time"
 
 	"github.com/user/openlist-sync/internal/database"
@@ -26,6 +28,9 @@ type Engine struct {
 	db     *sql.DB
 	client *openlist.Client
 	copier *Copier
+
+	taskMu   map[int64]*stdsync.Mutex
+	taskMuMu stdsync.Mutex
 }
 
 func NewEngine(db *sql.DB, client *openlist.Client) *Engine {
@@ -33,15 +38,32 @@ func NewEngine(db *sql.DB, client *openlist.Client) *Engine {
 		db:     db,
 		client: client,
 		copier: NewCopier(client),
+		taskMu: make(map[int64]*stdsync.Mutex),
 	}
 }
 
+func (e *Engine) getTaskMu(taskID int64) *stdsync.Mutex {
+	e.taskMuMu.Lock()
+	defer e.taskMuMu.Unlock()
+	if mu, ok := e.taskMu[taskID]; ok {
+		return mu
+	}
+	mu := &stdsync.Mutex{}
+	e.taskMu[taskID] = mu
+	return mu
+}
+
 func (e *Engine) RunSync(taskID int64) SyncResult {
+	mu := e.getTaskMu(taskID)
+	if !mu.TryLock() {
+		return SyncResult{TaskID: taskID, Error: "task already running"}
+	}
+	defer mu.Unlock()
 	start := time.Now()
 	result := SyncResult{TaskID: taskID}
 
 	database.UpdateTaskStatus(e.db, taskID, "running", nil)
-	database.InsertLog(e.db, taskID, "info", "Sync cycle started", nil)
+	database.InsertLog(e.db, taskID, "info", "同步周期开始", nil)
 
 	task, err := database.GetTaskByID(e.db, taskID)
 	if err != nil {
@@ -65,19 +87,19 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 		return result
 	}
 
-	missing := CompareFilesRecursive(sourceFiles, destFiles)
+	missing := CompareFilesRecursive(sourceFiles, destFiles, task.MatchMode)
 	result.Missing = len(missing)
 	result.Skipped = result.Scanned - result.Missing
 
 	if len(missing) == 0 {
 		database.InsertLog(e.db, taskID, "info",
-			fmt.Sprintf("No missing files found (%d skipped)", result.Skipped), nil)
+			fmt.Sprintf("未发现缺失文件（跳过 %d 个已存在）", result.Skipped), nil)
 		e.finishSync(taskID, &result, start)
 		return result
 	}
 
 	database.InsertLog(e.db, taskID, "info",
-		fmt.Sprintf("Found %d missing files (%d skipped)", len(missing), result.Skipped), nil)
+		fmt.Sprintf("发现 %d 个缺失文件（跳过 %d 个已存在），开始复制...", len(missing), result.Skipped), nil)
 
 	overwrite := task.ReplaceRule == "overwrite"
 	skipExisting := task.ReplaceRule == "skip"
@@ -102,25 +124,31 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 		if cr.Error != nil {
 			result.Failed++
 			errStr := cr.Error.Error()
-			database.UpdateCopyJobStatus(e.db, jobID, "failed", strPtr(cr.TaskID), &errStr)
+			database.UpdateCopyJobStatus(e.db, jobID, "failed", nil, &errStr)
 			database.InsertLog(e.db, taskID, "error",
-				fmt.Sprintf("Copy failed: %s: %v", items[i].FileName, cr.Error), nil)
+				fmt.Sprintf("复制失败: %s → %v", items[i].FileName, cr.Error), nil)
 		} else {
 			result.Copied++
-			database.UpdateCopyJobStatus(e.db, jobID, "completed", strPtr(cr.TaskID), nil)
+			database.UpdateCopyJobStatus(e.db, jobID, "completed", nil, nil)
+			database.InsertLog(e.db, taskID, "info",
+				fmt.Sprintf("复制成功: %s", items[i].FileName), nil)
 			deletedNames = append(deletedNames, items[i].FileName)
 			deletedSrcDirs = append(deletedSrcDirs, items[i].SrcDir)
 		}
 	}
 
 	if task.CompletionRule == "delete_source" && len(deletedNames) > 0 {
+		database.InsertLog(e.db, taskID, "info",
+			fmt.Sprintf("开始删除 %d 个源文件...", len(deletedNames)), nil)
 		if err := e.deleteSourceFiles(deletedSrcDirs, deletedNames); err != nil {
 			database.InsertLog(e.db, taskID, "error",
-				fmt.Sprintf("Delete source failed: %v", err), nil)
+				fmt.Sprintf("删除源文件失败: %v", err), nil)
 		} else {
 			result.Deleted = len(deletedNames)
-			database.InsertLog(e.db, taskID, "info",
-				fmt.Sprintf("Deleted %d source files", len(deletedNames)), nil)
+			for _, name := range deletedNames {
+				database.InsertLog(e.db, taskID, "info",
+					fmt.Sprintf("已删除源文件: %s", name), nil)
+			}
 		}
 	}
 
@@ -144,6 +172,17 @@ func (e *Engine) deleteSourceFiles(srcDirs, fileNames []string) error {
 func (e *Engine) finishSync(taskID int64, result *SyncResult, start time.Time) {
 	result.DurationMs = time.Since(start).Milliseconds()
 
+	summary := map[string]interface{}{
+		"scanned":    result.Scanned,
+		"missing":    result.Missing,
+		"skipped":    result.Skipped,
+		"copied":     result.Copied,
+		"failed":     result.Failed,
+		"deleted":    result.Deleted,
+		"durationMs": result.DurationMs,
+	}
+	summaryJSON, _ := json.Marshal(summary)
+
 	var taskErr *string
 	if result.Error != "" {
 		taskErr = &result.Error
@@ -151,9 +190,9 @@ func (e *Engine) finishSync(taskID int64, result *SyncResult, start time.Time) {
 		database.InsertLog(e.db, taskID, "error", result.Error, nil)
 	} else {
 		database.UpdateTaskStatus(e.db, taskID, "idle", nil)
-		database.InsertLog(e.db, taskID, "info",
-			fmt.Sprintf("Sync completed: %d scanned, %d skipped, %d copied, %d failed, %d deleted in %dms",
-				result.Scanned, result.Skipped, result.Copied, result.Failed, result.Deleted, result.DurationMs), nil)
+		msg := fmt.Sprintf("同步完成：扫描 %d | 缺失 %d | 跳过 %d | 已复制 %d | 失败 %d | 已删除 %d | 耗时 %dms",
+			result.Scanned, result.Missing, result.Skipped, result.Copied, result.Failed, result.Deleted, result.DurationMs)
+		database.InsertLog(e.db, taskID, "info", msg, strPtr(string(summaryJSON)))
 	}
 
 	database.UpdateTaskLastSync(e.db, taskID)

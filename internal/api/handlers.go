@@ -9,18 +9,20 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/user/openlist-sync/internal/database"
 	"github.com/user/openlist-sync/internal/openlist"
+	"github.com/user/openlist-sync/internal/scheduler"
 	"github.com/user/openlist-sync/internal/sync"
 )
 
 type Handlers struct {
-	db       *sql.DB
-	client   *openlist.Client
-	engine   *sync.Engine
+	db      *sql.DB
+	client  *openlist.Client
+	engine  *sync.Engine
+	sched   *scheduler.Scheduler
 	onTGBot func(token string, chatID int64)
 }
 
-func NewHandlers(db *sql.DB, client *openlist.Client, engine *sync.Engine) *Handlers {
-	return &Handlers{db: db, client: client, engine: engine}
+func NewHandlers(db *sql.DB, client *openlist.Client, engine *sync.Engine, sched *scheduler.Scheduler) *Handlers {
+	return &Handlers{db: db, client: client, engine: engine, sched: sched}
 }
 
 func (h *Handlers) SetTGBotCallback(fn func(token string, chatID int64)) {
@@ -116,6 +118,7 @@ func (h *Handlers) CreateTask(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	h.sched.StartTask(task.ID, task.ScanIntervalSec)
 	c.JSON(http.StatusOK, task.ToJSON())
 }
 
@@ -149,6 +152,11 @@ func (h *Handlers) UpdateTask(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	if task.Enabled {
+		h.sched.RestartTask(task.ID, task.ScanIntervalSec)
+	} else {
+		h.sched.StopTask(task.ID)
+	}
 	c.JSON(http.StatusOK, task.ToJSON())
 }
 
@@ -158,6 +166,7 @@ func (h *Handlers) DeleteTask(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid id"})
 		return
 	}
+	h.sched.StopTask(id)
 	if err := database.DeleteTask(h.db, id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -173,6 +182,7 @@ func (h *Handlers) StartTask(c *gin.Context) {
 	}
 	database.UpdateTaskEnabled(h.db, id, true, "idle")
 	task, _ := database.GetTaskByID(h.db, id)
+	h.sched.StartTask(task.ID, task.ScanIntervalSec)
 	c.JSON(http.StatusOK, task.ToJSON())
 }
 
@@ -184,6 +194,7 @@ func (h *Handlers) StopTask(c *gin.Context) {
 	}
 	database.UpdateTaskEnabled(h.db, id, false, "paused")
 	task, _ := database.GetTaskByID(h.db, id)
+	h.sched.StopTask(id)
 	c.JSON(http.StatusOK, task.ToJSON())
 }
 
@@ -204,7 +215,10 @@ func (h *Handlers) TriggerTask(c *gin.Context) {
 		return
 	}
 
-	go h.engine.RunSync(id)
+	if !h.sched.TriggerSync(id) {
+		c.JSON(http.StatusConflict, gin.H{"message": "task is already running"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "sync started", "task_id": id})
 }
@@ -303,9 +317,9 @@ func (h *Handlers) SyncStatus(c *gin.Context) {
 	}
 
 	type taskStatus struct {
-		ID        int64   `json:"id"`
-		Name      string  `json:"name"`
-		Status    string  `json:"status"`
+		ID         int64   `json:"id"`
+		Name       string  `json:"name"`
+		Status     string  `json:"status"`
 		LastSyncAt *string `json:"lastSyncAt"`
 	}
 
@@ -316,9 +330,9 @@ func (h *Handlers) SyncStatus(c *gin.Context) {
 			runningCount++
 		}
 		taskList = append(taskList, taskStatus{
-			ID:        t.ID,
-			Name:      t.Name,
-			Status:    t.Status,
+			ID:         t.ID,
+			Name:       t.Name,
+			Status:     t.Status,
 			LastSyncAt: formatUnixPtr(t.LastSyncAt),
 		})
 	}
@@ -326,6 +340,44 @@ func (h *Handlers) SyncStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"runningCount": runningCount,
 		"tasks":        taskList,
+	})
+}
+
+func (h *Handlers) SyncProgress(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid id"})
+		return
+	}
+
+	if !h.sched.IsRunning(id) {
+		c.JSON(http.StatusOK, gin.H{"running": false})
+		return
+	}
+
+	copyTasks, err := h.client.GetCopyTasks()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"running": true, "progress": nil, "error": err.Error()})
+		return
+	}
+
+	var active []gin.H
+	for _, t := range copyTasks {
+		active = append(active, gin.H{
+			"id":         t.ID,
+			"name":       t.Name,
+			"state":      t.State,
+			"status":     t.Status,
+			"progress":   t.Progress,
+			"totalBytes": t.TotalBytes,
+			"error":      t.Error,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"running":   true,
+		"copyTasks": active,
+		"taskCount": len(active),
 	})
 }
 

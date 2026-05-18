@@ -5,6 +5,7 @@ export interface SyncTask {
   destPath: string;
   completionRule: "keep" | "delete_source";
   replaceRule: "skip" | "overwrite";
+  matchMode: "exact" | "smart";
   scanIntervalSec: number;
   enabled: boolean;
   status: "idle" | "running" | "paused" | "error";
@@ -75,5 +76,22 @@ export interface SyncCycleResult {
   failed: number;
   deleted: number;
   durationMs: number;
+  error?: string;
+}
+
+export interface CopyTaskProgress {
+  id: string;
+  name: string;
+  state: number;
+  status: string;
+  progress: number;
+  totalBytes: number;
+  error: string;
+}
+
+export interface SyncProgress {
+  running: boolean;
+  copyTasks: CopyTaskProgress[] | null;
+  taskCount: number;
   error?: string;
 }
