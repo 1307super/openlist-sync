@@ -1,0 +1,85 @@
+import type {
+  SyncTask,
+  SyncLog,
+  CopyJob,
+  Settings,
+  BrowseResponse,
+  TestConnectionResult,
+  SyncCycleResult,
+  PaginatedResponse,
+} from "../types";
+
+const BASE = "/api";
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown
+): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }));
+    throw new Error(err.message || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// Settings API
+export const settingsApi = {
+  get: () => request<Settings>("GET", "/settings"),
+  update: (data: Partial<Settings>) =>
+    request<{ success: boolean }>("PUT", "/settings", data),
+  test: () => request<TestConnectionResult>("POST", "/settings/test"),
+};
+
+// Tasks API
+export const tasksApi = {
+  list: () => request<SyncTask[]>("GET", "/tasks"),
+  get: (id: number) => request<SyncTask>("GET", `/tasks/${id}`),
+  create: (data: Partial<SyncTask>) =>
+    request<SyncTask>("POST", "/tasks", data),
+  update: (id: number, data: Partial<SyncTask>) =>
+    request<SyncTask>("PUT", `/tasks/${id}`, data),
+  delete: (id: number) =>
+    request<{ success: boolean }>("DELETE", `/tasks/${id}`),
+  start: (id: number) => request<SyncTask>("POST", `/tasks/${id}/start`),
+  stop: (id: number) => request<SyncTask>("POST", `/tasks/${id}/stop`),
+  trigger: (id: number) =>
+    request<{ message: string; task_id: number }>("POST", `/tasks/${id}/trigger`),
+  logs: (id: number, page: number = 1, perPage: number = 50) =>
+    request<PaginatedResponse<SyncLog>>(
+      "GET",
+      `/tasks/${id}/logs?page=${page}&per_page=${perPage}`
+    ),
+  jobs: (id: number) => request<CopyJob[]>("GET", `/tasks/${id}/jobs`),
+};
+
+// Browse API
+export const browseApi = {
+  list: (path: string, page: number = 1, perPage: number = 100) =>
+    request<BrowseResponse>("POST", "/browse/list", {
+      path,
+      page,
+      per_page: perPage,
+    }),
+  dirs: (path: string) =>
+    request<BrowseResponse>("POST", "/browse/dirs", { path }),
+};
+
+// Sync API
+export const syncApi = {
+  status: () =>
+    request<{
+      runningCount: number;
+      tasks: Array<{
+        id: number;
+        name: string;
+        status: string;
+        lastSyncAt: string | null;
+      }>;
+    }>("GET", "/sync/status"),
+};

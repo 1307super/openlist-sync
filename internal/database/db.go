@@ -1,0 +1,69 @@
+package database
+
+import (
+	"database/sql"
+	"fmt"
+)
+
+var migrations = []string{
+	`CREATE TABLE IF NOT EXISTS settings (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		key TEXT NOT NULL UNIQUE,
+		value TEXT NOT NULL,
+		updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+	)`,
+	`CREATE TABLE IF NOT EXISTS sync_tasks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL,
+		source_path TEXT NOT NULL,
+		dest_path TEXT NOT NULL,
+		completion_rule TEXT NOT NULL DEFAULT 'keep',
+		replace_rule TEXT NOT NULL DEFAULT 'skip',
+		scan_interval_sec INTEGER NOT NULL DEFAULT 300,
+		enabled INTEGER NOT NULL DEFAULT 1,
+		status TEXT NOT NULL DEFAULT 'idle',
+		last_scan_at INTEGER,
+		last_sync_at INTEGER,
+		error TEXT,
+		created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+		updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+	)`,
+	`CREATE TABLE IF NOT EXISTS sync_logs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		task_id INTEGER NOT NULL REFERENCES sync_tasks(id) ON DELETE CASCADE,
+		level TEXT NOT NULL,
+		message TEXT NOT NULL,
+		details TEXT,
+		created_at INTEGER NOT NULL DEFAULT (unixepoch())
+	)`,
+	`CREATE INDEX IF NOT EXISTS sync_logs_task_idx ON sync_logs(task_id)`,
+	`CREATE TABLE IF NOT EXISTS copy_jobs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		task_id INTEGER NOT NULL REFERENCES sync_tasks(id) ON DELETE CASCADE,
+		file_name TEXT NOT NULL,
+		src_dir TEXT NOT NULL,
+		dst_dir TEXT NOT NULL,
+		openlist_task_id TEXT,
+		status TEXT NOT NULL DEFAULT 'pending',
+		retry_count INTEGER NOT NULL DEFAULT 0,
+		error TEXT,
+		created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+		completed_at INTEGER
+	)`,
+	`CREATE INDEX IF NOT EXISTS copy_jobs_task_status_idx ON copy_jobs(task_id, status)`,
+}
+
+func InitDB(dbPath string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=1")
+	if err != nil {
+		return nil, fmt.Errorf("open db: %w", err)
+	}
+
+	for _, m := range migrations {
+		if _, err := db.Exec(m); err != nil {
+			return nil, fmt.Errorf("migration: %w", err)
+		}
+	}
+
+	return db, nil
+}
