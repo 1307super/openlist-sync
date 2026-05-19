@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -390,6 +391,39 @@ func GetCopyJobsByTask(db *sql.DB, taskID int64) ([]CopyJob, error) {
 	return jobs, rows.Err()
 }
 
+func GetPendingCopyJobs(db *sql.DB) ([]CopyJob, error) {
+	rows, err := db.Query(`SELECT id, task_id, file_name, src_dir, dst_dir, openlist_task_id,
+		status, retry_count, error, created_at, completed_at
+		FROM copy_jobs WHERE status = 'pending' ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []CopyJob
+	for rows.Next() {
+		var j CopyJob
+		if err := rows.Scan(&j.ID, &j.TaskID, &j.FileName, &j.SrcDir, &j.DstDir,
+			&j.OpenlistTaskID, &j.Status, &j.RetryCount, &j.Error, &j.CreatedAt, &j.CompletedAt); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs, rows.Err()
+}
+
+func DeleteCopyJobByTask(db *sql.DB, taskID, jobID int64) (bool, error) {
+	res, err := db.Exec("DELETE FROM copy_jobs WHERE task_id = ? AND id = ?", taskID, jobID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 func InsertCopyJob(db *sql.DB, taskID int64, fileName, srcDir, dstDir string) (int64, error) {
 	res, err := db.Exec(`INSERT INTO copy_jobs (task_id, file_name, src_dir, dst_dir, status)
 		VALUES (?, ?, ?, ?, 'pending')`, taskID, fileName, srcDir, dstDir)
@@ -417,7 +451,7 @@ func IncrementCopyJobRetry(db *sql.DB, id int64) error {
 }
 
 func GetPendingCopyFiles(db *sql.DB, taskID int64) (map[string]struct{}, error) {
-	rows, err := db.Query("SELECT file_name FROM copy_jobs WHERE task_id = ? AND status = 'pending'", taskID)
+	rows, err := db.Query("SELECT file_name, src_dir FROM copy_jobs WHERE task_id = ? AND status = 'pending'", taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -425,13 +459,17 @@ func GetPendingCopyFiles(db *sql.DB, taskID int64) (map[string]struct{}, error) 
 
 	m := make(map[string]struct{})
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var name, srcDir string
+		if err := rows.Scan(&name, &srcDir); err != nil {
 			return nil, err
 		}
-		m[name] = struct{}{}
+		m[CopyJobKey(srcDir, name)] = struct{}{}
 	}
 	return m, rows.Err()
+}
+
+func CopyJobKey(srcDir, fileName string) string {
+	return strings.TrimRight(srcDir, "/") + "/" + fileName
 }
 
 func GetEnabledTasks(db *sql.DB) ([]SyncTask, error) {

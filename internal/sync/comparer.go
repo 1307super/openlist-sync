@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/user/openlist-sync/internal/database"
 	"github.com/user/openlist-sync/internal/openlist"
 )
 
@@ -13,13 +14,14 @@ var (
 	extractSERe = regexp.MustCompile(`[Ss](\d+)[Ee](\d+)`)
 )
 
-func CompareFilesRecursive(src, dest []openlist.FileEntry, matchMode string, pendingFiles map[string]struct{}) []openlist.FileEntry {
+func CompareFilesRecursive(src, dest []openlist.FileEntry, matchMode, srcRoot string, pendingFiles map[string]struct{}) []openlist.FileEntry {
 	var missing []openlist.FileEntry
 
 	for _, f := range src {
 		fileName := path.Base(f.RelPath)
 
-		if _, ok := pendingFiles[fileName]; ok {
+		srcDir, _, fileName := RelPathToCopyDirs(f.RelPath, srcRoot, "")
+		if _, ok := pendingFiles[database.CopyJobKey(srcDir, fileName)]; ok {
 			continue
 		}
 

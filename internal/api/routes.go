@@ -25,6 +25,7 @@ func RegisterRoutes(r *gin.Engine, h *Handlers, staticFS fs.FS) {
 		api.POST("/tasks/:id/trigger", h.TriggerTask)
 		api.GET("/tasks/:id/logs", h.GetTaskLogs)
 		api.GET("/tasks/:id/jobs", h.GetTaskJobs)
+		api.DELETE("/tasks/:id/jobs/:jobId", h.DeleteTaskJob)
 		api.GET("/tasks/:id/progress", h.SyncProgress)
 
 		api.POST("/browse/list", h.BrowseList)

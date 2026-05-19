@@ -5,3 +5,5 @@ data/
 openlist-sync
 dist/
 web-ui/dist/
+.omc
+.idea

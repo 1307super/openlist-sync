@@ -43,6 +43,7 @@ func main() {
 
 	client := openlist.NewClient(db)
 	engine := syncengine.NewEngine(db, client)
+	reconciler := syncengine.NewPendingReconciler(db, client, 30*time.Second)
 	sched := scheduler.NewScheduler(db, engine)
 	handlers := api.NewHandlers(db, client, engine, sched)
 
@@ -70,6 +71,7 @@ func main() {
 
 	sched.Start()
 	log.Printf("[main] scheduler started")
+	reconciler.Start()
 
 	var tgBot *telegram.Bot
 	var tgMu sync.Mutex
@@ -115,6 +117,7 @@ func main() {
 	log.Println("[main] shutting down...")
 
 	sched.StopAll()
+	reconciler.Stop()
 	if tgBot != nil {
 		tgBot.Stop()
 	}

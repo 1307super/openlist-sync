@@ -7,6 +7,7 @@ import {
   ArrowRight,
   Timer,
   Clock,
+  FileText,
 } from "lucide-react";
 import { useSyncProgress } from "../hooks/useSyncProgress";
 import type { SyncTask } from "../types";
@@ -18,6 +19,7 @@ interface TaskCardProps {
   onTrigger: (id: number) => void;
   onEdit: (task: SyncTask) => void;
   onDelete: (id: number) => void;
+  onOpen: (id: number) => void;
 }
 
 const statusLabels: Record<SyncTask["status"], string> = {
@@ -120,11 +122,15 @@ export default function TaskCard({
   onTrigger,
   onEdit,
   onDelete,
+  onOpen,
 }: TaskCardProps) {
   const isRunning = task.status === "running";
 
   return (
-    <div className="bg-slate-800 rounded-lg p-4 border border-slate-700/50 hover:border-slate-600 transition-colors">
+    <div
+      onClick={() => onOpen(task.id)}
+      className="bg-slate-800 rounded-lg p-4 border border-slate-700/50 hover:border-slate-600 transition-colors cursor-pointer"
+    >
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2.5 mb-1">
@@ -173,7 +179,10 @@ export default function TaskCard({
       <div className="flex items-center gap-1.5 flex-wrap mt-3">
         {isRunning ? (
           <button
-            onClick={() => onStop(task.id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onStop(task.id);
+            }}
             className="p-2 rounded-lg text-yellow-400 hover:bg-yellow-500/10 transition-colors"
             title="停止"
           >
@@ -181,7 +190,10 @@ export default function TaskCard({
           </button>
         ) : (
           <button
-            onClick={() => onStart(task.id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onStart(task.id);
+            }}
             className="p-2 rounded-lg text-green-400 hover:bg-green-500/10 transition-colors"
             title="启动"
           >
@@ -189,21 +201,40 @@ export default function TaskCard({
           </button>
         )}
         <button
-          onClick={() => onTrigger(task.id)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onTrigger(task.id);
+          }}
           className="p-2 rounded-lg text-blue-400 hover:bg-blue-500/10 transition-colors"
           title="立即同步"
         >
           <RefreshCw className="w-4 h-4" />
         </button>
         <button
-          onClick={() => onEdit(task)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen(task.id);
+          }}
+          className="p-2 rounded-lg text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
+          title="详情 / 日志"
+        >
+          <FileText className="w-4 h-4" />
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit(task);
+          }}
           className="p-2 rounded-lg text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
           title="编辑"
         >
           <Pencil className="w-4 h-4" />
         </button>
         <button
-          onClick={() => onDelete(task.id)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(task.id);
+          }}
           className="p-2 rounded-lg text-slate-400 hover:bg-red-500/10 hover:text-red-400 transition-colors"
           title="删除"
         >

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { Plus, Loader2, FolderSync } from "lucide-react";
 import { useTasks } from "../hooks/useTasks";
 import TaskCard from "../components/TaskCard";
@@ -6,6 +7,7 @@ import TaskForm from "../components/TaskForm";
 import type { SyncTask } from "../types";
 
 export default function TasksPage() {
+  const navigate = useNavigate();
   const {
     tasks,
     loading,
@@ -130,6 +132,7 @@ export default function TasksPage() {
               onTrigger={handleTrigger}
               onEdit={setEditingTask}
               onDelete={handleDelete}
+              onOpen={(id) => navigate(`/tasks/${id}`)}
             />
           ))}
         </div>

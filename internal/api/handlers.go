@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -262,6 +263,33 @@ func (h *Handlers) GetTaskJobs(c *gin.Context) {
 		items = append(items, j.ToJSON())
 	}
 	c.JSON(http.StatusOK, items)
+}
+
+func (h *Handlers) DeleteTaskJob(c *gin.Context) {
+	taskID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid task id"})
+		return
+	}
+	jobID, err := strconv.ParseInt(c.Param("jobId"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid job id"})
+		return
+	}
+
+	deleted, err := database.DeleteCopyJobByTask(h.db, taskID, jobID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if !deleted {
+		c.JSON(http.StatusNotFound, gin.H{"message": "copy job not found"})
+		return
+	}
+
+	database.InsertLog(h.db, taskID, "warn",
+		fmt.Sprintf("手动删除本地复制记录 #%d", jobID), nil)
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 func (h *Handlers) BrowseList(c *gin.Context) {

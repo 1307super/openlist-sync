@@ -57,6 +57,8 @@ export const tasksApi = {
       `/tasks/${id}/logs?page=${page}&per_page=${perPage}`
     ),
   jobs: (id: number) => request<CopyJob[]>("GET", `/tasks/${id}/jobs`),
+  deleteJob: (id: number, jobId: number) =>
+    request<{ success: boolean }>("DELETE", `/tasks/${id}/jobs/${jobId}`),
 };
 
 // Browse API

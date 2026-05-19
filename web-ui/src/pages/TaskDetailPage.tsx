@@ -69,6 +69,7 @@ export default function TaskDetailPage() {
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deletingJobId, setDeletingJobId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const fetchTask = useCallback(async () => {
@@ -92,7 +93,9 @@ export default function TaskDetailPage() {
   }, [fetchTask]);
 
   const isRunning = task?.status === "running";
-  const hasActiveJobs = jobs.some((j) => j.status === "copying");
+  const hasActiveJobs = jobs.some(
+    (j) => j.status === "copying" || j.status === "pending"
+  );
 
   useEffect(() => {
     if (!isRunning && !hasActiveJobs) return;
@@ -133,6 +136,23 @@ export default function TaskDetailPage() {
       navigate("/");
     } catch (e) {
       setError(e instanceof Error ? e.message : "删除失败");
+    }
+  };
+
+  const handleDeleteJob = async (job: CopyJob) => {
+    const ok = window.confirm(
+      `删除本地复制记录「${job.fileName}」？这不会删除 OpenList 中的任务，只会释放本项目的 pending 占用。`
+    );
+    if (!ok) return;
+
+    setDeletingJobId(job.id);
+    try {
+      await tasksApi.deleteJob(taskId, job.id);
+      await fetchTask();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "删除复制记录失败");
+    } finally {
+      setDeletingJobId(null);
     }
   };
 
@@ -360,11 +380,16 @@ export default function TaskDetailPage() {
       </div>
 
       <div className="space-y-3">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <h2 className="text-lg font-semibold text-white">复制记录</h2>
           <span className="text-xs font-medium text-slate-500 bg-slate-800 px-2 py-0.5 rounded-full">
             {jobs.length}
           </span>
+          {jobs.some((job) => job.status === "pending") && (
+            <span className="text-xs font-medium text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">
+              pending {jobs.filter((job) => job.status === "pending").length}
+            </span>
+          )}
         </div>
 
         {jobs.length === 0 ? (
@@ -382,6 +407,7 @@ export default function TaskDetailPage() {
                   <th className="px-4 py-3 font-medium">错误</th>
                   <th className="px-4 py-3 font-medium">创建时间</th>
                   <th className="px-4 py-3 font-medium">完成时间</th>
+                  <th className="px-4 py-3 font-medium text-right">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/50">
@@ -434,6 +460,25 @@ export default function TaskDetailPage() {
                     </td>
                     <td className="px-4 py-3 text-slate-400 whitespace-nowrap">
                       {formatRelative(job.completedAt)}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {(job.status === "pending" || job.status === "failed") ? (
+                        <button
+                          onClick={() => handleDeleteJob(job)}
+                          disabled={deletingJobId === job.id}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20 transition-colors disabled:opacity-50"
+                          title="删除本地复制记录，释放 pending 占用"
+                        >
+                          {deletingJobId === job.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-3.5 h-3.5" />
+                          )}
+                          删除
+                        </button>
+                      ) : (
+                        <span className="text-slate-600">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}

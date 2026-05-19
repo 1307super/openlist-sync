@@ -89,7 +89,7 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 
 	pendingFiles, _ := database.GetPendingCopyFiles(e.db, taskID)
 
-	missing := CompareFilesRecursive(sourceFiles, destFiles, task.MatchMode, pendingFiles)
+	missing := CompareFilesRecursive(sourceFiles, destFiles, task.MatchMode, task.SourcePath, pendingFiles)
 	result.Missing = len(missing)
 	result.Skipped = result.Scanned - result.Missing
 
@@ -102,6 +102,19 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 
 	database.InsertLog(e.db, taskID, "info",
 		fmt.Sprintf("发现 %d 个缺失文件（跳过 %d 个已存在），开始复制...", len(missing), result.Skipped), nil)
+
+	availableSlots := e.copier.concurrency - len(pendingFiles)
+	if availableSlots <= 0 {
+		database.InsertLog(e.db, taskID, "info",
+			fmt.Sprintf("已有 %d 个复制任务等待完成，达到并发上限 %d，本轮不提交新任务", len(pendingFiles), e.copier.concurrency), nil)
+		e.finishSync(taskID, &result, start)
+		return result
+	}
+	if len(missing) > availableSlots {
+		database.InsertLog(e.db, taskID, "info",
+			fmt.Sprintf("并发上限 %d，已有 %d 个等待完成，本轮只提交 %d 个新任务", e.copier.concurrency, len(pendingFiles), availableSlots), nil)
+		missing = missing[:availableSlots]
+	}
 
 	overwrite := task.ReplaceRule == "overwrite"
 	skipExisting := task.ReplaceRule == "skip"
@@ -122,8 +135,6 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 
 	copyResults := e.copier.CopyFiles(items, overwrite, skipExisting)
 
-	var deletedNames []string
-	var deletedSrcDirs []string
 	for i, cr := range copyResults {
 		if cr.Error != nil {
 			result.Failed++
@@ -132,45 +143,15 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 			database.InsertLog(e.db, taskID, "error",
 				fmt.Sprintf("复制失败: %s → %v", items[i].FileName, cr.Error), nil)
 		} else {
-			result.Copied++
-			database.UpdateCopyJobStatus(e.db, jobIDs[i], "completed", nil, nil)
+			result.Skipped++
+			result.Missing--
 			database.InsertLog(e.db, taskID, "info",
-				fmt.Sprintf("复制成功: %s", items[i].FileName), nil)
-			deletedNames = append(deletedNames, items[i].FileName)
-			deletedSrcDirs = append(deletedSrcDirs, items[i].SrcDir)
-		}
-	}
-
-	if task.CompletionRule == "delete_source" && len(deletedNames) > 0 {
-		database.InsertLog(e.db, taskID, "info",
-			fmt.Sprintf("开始删除 %d 个源文件...", len(deletedNames)), nil)
-		if err := e.deleteSourceFiles(deletedSrcDirs, deletedNames); err != nil {
-			database.InsertLog(e.db, taskID, "error",
-				fmt.Sprintf("删除源文件失败: %v", err), nil)
-		} else {
-			result.Deleted = len(deletedNames)
-			for _, name := range deletedNames {
-				database.InsertLog(e.db, taskID, "info",
-					fmt.Sprintf("已删除源文件: %s", name), nil)
-			}
+				fmt.Sprintf("复制任务已提交，等待后台确认完成: %s", items[i].FileName), nil)
 		}
 	}
 
 	e.finishSync(taskID, &result, start)
 	return result
-}
-
-func (e *Engine) deleteSourceFiles(srcDirs, fileNames []string) error {
-	grouped := make(map[string][]string)
-	for i, dir := range srcDirs {
-		grouped[dir] = append(grouped[dir], fileNames[i])
-	}
-	for dir, names := range grouped {
-		if err := e.client.Remove(dir, names); err != nil {
-			return fmt.Errorf("remove from %s: %w", dir, err)
-		}
-	}
-	return nil
 }
 
 func (e *Engine) finishSync(taskID int64, result *SyncResult, start time.Time) {
