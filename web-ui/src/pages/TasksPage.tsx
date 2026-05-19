@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Loader2, FolderSync } from "lucide-react";
+import { Plus, Loader2, FolderSync, Search } from "lucide-react";
 import { useTasks } from "../hooks/useTasks";
 import { useOpenListCopyTasks } from "../hooks/useOpenListCopyTasks";
 import TaskCard from "../components/TaskCard";
@@ -24,6 +24,7 @@ export default function TasksPage() {
 
   const [showForm, setShowForm] = useState(false);
   const [editingTask, setEditingTask] = useState<SyncTask | null>(null);
+  const [keyword, setKeyword] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -35,6 +36,17 @@ export default function TasksPage() {
 
   const hasRunning = tasks.some((t) => t.status === "running");
   const copyTasks = useOpenListCopyTasks();
+
+  const filteredTasks = keyword.trim()
+    ? tasks.filter((t) => {
+        const kw = keyword.toLowerCase();
+        return (
+          t.name.toLowerCase().includes(kw) ||
+          t.sourcePath.toLowerCase().includes(kw) ||
+          t.destPath.toLowerCase().includes(kw)
+        );
+      })
+    : tasks;
 
   useEffect(() => {
     if (!hasRunning) return;
@@ -107,6 +119,19 @@ export default function TasksPage() {
         </button>
       </div>
 
+      {tasks.length > 0 && (
+        <div className="relative mb-4">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
+          <input
+            type="text"
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            placeholder="搜索任务名称或路径..."
+            className="input pl-9"
+          />
+        </div>
+      )}
+
       {copyTasks.length > 0 && <GlobalProgress tasks={copyTasks} />}
 
       {loading ? (
@@ -114,21 +139,36 @@ export default function TasksPage() {
           <Loader2 className="w-6 h-6 animate-spin" />
           <span className="ml-3">加载任务中...</span>
         </div>
-      ) : tasks.length === 0 ? (
+      ) : filteredTasks.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-slate-500">
-          <FolderSync className="w-12 h-12 mb-4 text-slate-600" />
-          <p className="text-sm mb-4">暂无同步任务</p>
-          <button
-            onClick={() => setShowForm(true)}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            创建第一个任务
-          </button>
+          {keyword.trim() ? (
+            <>
+              <Search className="w-12 h-12 mb-4 text-slate-600" />
+              <p className="text-sm">没有匹配「{keyword.trim()}」的任务</p>
+              <button
+                onClick={() => setKeyword("")}
+                className="mt-3 text-sm text-primary hover:underline"
+              >
+                清除筛选
+              </button>
+            </>
+          ) : (
+            <>
+              <FolderSync className="w-12 h-12 mb-4 text-slate-600" />
+              <p className="text-sm mb-4">暂无同步任务</p>
+              <button
+                onClick={() => setShowForm(true)}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                创建第一个任务
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {tasks.map((task) => (
+          {filteredTasks.map((task) => (
             <TaskCard
               key={task.id}
               task={task}

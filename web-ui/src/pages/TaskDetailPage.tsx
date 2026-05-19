@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { tasksApi } from "../api/client";
 import type { SyncTask, CopyJob } from "../types";
 import LogViewer from "../components/LogViewer";
+import TaskForm from "../components/TaskForm";
 import {
   ArrowLeft,
   Play,
@@ -70,6 +71,7 @@ export default function TaskDetailPage() {
   const [triggering, setTriggering] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deletingJobId, setDeletingJobId] = useState<number | null>(null);
+  const [showEditForm, setShowEditForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchTask = useCallback(async () => {
@@ -93,6 +95,7 @@ export default function TaskDetailPage() {
   }, [fetchTask]);
 
   const isRunning = task?.status === "running";
+  const isActive = task ? task.enabled && task.status !== "paused" : false;
   const hasActiveJobs = jobs.some(
     (j) => j.status === "copying" || j.status === "pending"
   );
@@ -106,7 +109,7 @@ export default function TaskDetailPage() {
   const handleStartStop = async () => {
     if (!task) return;
     try {
-      if (task.status === "running") {
+      if (isActive) {
         const updated = await tasksApi.stop(taskId);
         setTask(updated);
       } else {
@@ -153,6 +156,16 @@ export default function TaskDetailPage() {
       setError(e instanceof Error ? e.message : "删除复制记录失败");
     } finally {
       setDeletingJobId(null);
+    }
+  };
+
+  const handleEdit = async (data: Partial<SyncTask>) => {
+    try {
+      const updated = await tasksApi.update(taskId, data);
+      setTask(updated);
+      setShowEditForm(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "更新失败");
     }
   };
 
@@ -234,19 +247,28 @@ export default function TaskDetailPage() {
         </div>
       </div>
 
+      {showEditForm && task && (
+        <TaskForm
+          mode="edit"
+          task={task}
+          onSubmit={handleEdit}
+          onCancel={() => setShowEditForm(false)}
+        />
+      )}
+
       <div className="flex items-center gap-2 flex-wrap">
         <button
           onClick={handleStartStop}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-            task.status === "running"
+            isActive
               ? "bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 border border-yellow-500/20"
               : "bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20"
           }`}
         >
-          {task.status === "running" ? (
+          {isActive ? (
             <>
               <Square className="w-4 h-4" />
-              <span className="hidden sm:inline">停止</span>
+              <span className="hidden sm:inline">暂停</span>
             </>
           ) : (
             <>
@@ -269,7 +291,10 @@ export default function TaskDetailPage() {
           </span>
         </button>
 
-        <button className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 transition-colors">
+        <button
+          onClick={() => setShowEditForm(true)}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 transition-colors"
+        >
           <Pencil className="w-4 h-4" />
           <span className="hidden sm:inline">编辑</span>
         </button>
