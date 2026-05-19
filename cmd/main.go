@@ -18,6 +18,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/user/openlist-sync/internal/api"
+	"github.com/user/openlist-sync/internal/auth"
 	"github.com/user/openlist-sync/internal/database"
 	"github.com/user/openlist-sync/internal/openlist"
 	"github.com/user/openlist-sync/internal/scheduler"
@@ -48,6 +49,12 @@ func main() {
 	handlers := api.NewHandlers(db, client, engine, sched)
 
 	api.InitDefaultCredentials(db)
+
+	if adminPass := os.Getenv("ADMIN_PASSWORD"); adminPass != "" {
+		database.UpsertSetting(db, "auth_password", auth.HashPassword(adminPass))
+		log.Printf("[main] admin password reset via ADMIN_PASSWORD env")
+	}
+
 	authSecret := getEnv("AUTH_SECRET", "openlist-sync-default-secret-change-me")
 
 	gin.SetMode(gin.ReleaseMode)

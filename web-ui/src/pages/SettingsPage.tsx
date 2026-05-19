@@ -40,7 +40,10 @@ export default function SettingsPage() {
     if (!data.auth_password) delete data.auth_password;
     updateSettings(data);
   };
-  const handleTest = () => testConnection(form);
+  const handleTest = () => {
+    const { auth_username, auth_password, ...connSettings } = form;
+    testConnection(connSettings);
+  };
 
   const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((prev) => ({ ...prev, [key]: e.target.value }));

@@ -70,15 +70,16 @@ func (h *Handlers) UpdateSettings(c *gin.Context) {
 	}
 
 	for k, v := range body {
-		if allowed[k] {
-			val := v
-			if k == "auth_password" {
-				val = auth.HashPassword(v)
-			}
-			if err := database.UpsertSetting(h.db, k, val); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-				return
-			}
+		if !allowed[k] || v == "" {
+			continue
+		}
+		val := v
+		if k == "auth_password" {
+			val = auth.HashPassword(v)
+		}
+		if err := database.UpsertSetting(h.db, k, val); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
 		}
 	}
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Loader2, FolderSync, Search } from "lucide-react";
+import { Plus, Loader2, FolderSync } from "lucide-react";
 import { useTasks } from "../hooks/useTasks";
 import { useOpenListCopyTasks } from "../hooks/useOpenListCopyTasks";
 import TaskCard from "../components/TaskCard";
@@ -120,14 +120,13 @@ export default function TasksPage() {
       </div>
 
       {tasks.length > 0 && (
-        <div className="relative mb-4">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
+        <div className="mb-4">
           <input
             type="text"
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
             placeholder="搜索任务名称或路径..."
-            className="input pl-9"
+            className="input"
           />
         </div>
       )}
@@ -143,7 +142,6 @@ export default function TasksPage() {
         <div className="flex flex-col items-center justify-center py-20 text-slate-500">
           {keyword.trim() ? (
             <>
-              <Search className="w-12 h-12 mb-4 text-slate-600" />
               <p className="text-sm">没有匹配「{keyword.trim()}」的任务</p>
               <button
                 onClick={() => setKeyword("")}
