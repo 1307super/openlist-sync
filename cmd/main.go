@@ -47,6 +47,9 @@ func main() {
 	sched := scheduler.NewScheduler(db, engine)
 	handlers := api.NewHandlers(db, client, engine, sched)
 
+	api.InitDefaultCredentials(db)
+	authSecret := getEnv("AUTH_SECRET", "openlist-sync-default-secret-change-me")
+
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 
@@ -55,7 +58,7 @@ func main() {
 		staticFS = sub
 	}
 
-	api.RegisterRoutes(r, handlers, staticFS)
+	api.RegisterRoutes(r, handlers, authSecret, staticFS)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%s", port),

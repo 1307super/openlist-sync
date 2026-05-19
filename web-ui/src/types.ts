@@ -44,6 +44,7 @@ export interface Settings {
   openlist_token?: string;
   tg_bot_token?: string;
   tg_chat_id?: string;
+  auth_username?: string;
 }
 
 export interface FileEntry {

@@ -22,7 +22,7 @@ type PendingReconciler struct {
 
 func NewPendingReconciler(db *sql.DB, client *openlist.Client, interval time.Duration) *PendingReconciler {
 	if interval <= 0 {
-		interval = 30 * time.Second
+		interval = 10 * time.Second
 	}
 	return &PendingReconciler{
 		db:       db,

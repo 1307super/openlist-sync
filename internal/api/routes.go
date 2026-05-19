@@ -8,30 +8,37 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func RegisterRoutes(r *gin.Engine, h *Handlers, staticFS fs.FS) {
+func RegisterRoutes(r *gin.Engine, h *Handlers, authSecret string, staticFS fs.FS) {
 	api := r.Group("/api")
+
+	api.POST("/auth/login", LoginHandler(h.db, authSecret))
+
+	protected := api.Group("")
+	protected.Use(AuthMiddleware(h.db, authSecret))
 	{
-		api.GET("/settings", h.GetSettings)
-		api.PUT("/settings", h.UpdateSettings)
-		api.POST("/settings/test", h.TestSettings)
+		protected.GET("/settings", h.GetSettings)
+		protected.PUT("/settings", h.UpdateSettings)
+		protected.POST("/settings/test", h.TestSettings)
 
-		api.GET("/tasks", h.ListTasks)
-		api.POST("/tasks", h.CreateTask)
-		api.GET("/tasks/:id", h.GetTask)
-		api.PUT("/tasks/:id", h.UpdateTask)
-		api.DELETE("/tasks/:id", h.DeleteTask)
-		api.POST("/tasks/:id/start", h.StartTask)
-		api.POST("/tasks/:id/stop", h.StopTask)
-		api.POST("/tasks/:id/trigger", h.TriggerTask)
-		api.GET("/tasks/:id/logs", h.GetTaskLogs)
-		api.GET("/tasks/:id/jobs", h.GetTaskJobs)
-		api.DELETE("/tasks/:id/jobs/:jobId", h.DeleteTaskJob)
-		api.GET("/tasks/:id/progress", h.SyncProgress)
+		protected.GET("/tasks", h.ListTasks)
+		protected.POST("/tasks", h.CreateTask)
+		protected.GET("/tasks/:id", h.GetTask)
+		protected.PUT("/tasks/:id", h.UpdateTask)
+		protected.DELETE("/tasks/:id", h.DeleteTask)
+		protected.POST("/tasks/:id/start", h.StartTask)
+		protected.POST("/tasks/:id/stop", h.StopTask)
+		protected.POST("/tasks/:id/trigger", h.TriggerTask)
+		protected.GET("/tasks/:id/logs", h.GetTaskLogs)
+		protected.GET("/tasks/:id/jobs", h.GetTaskJobs)
+		protected.DELETE("/tasks/:id/jobs/:jobId", h.DeleteTaskJob)
+		protected.GET("/tasks/:id/progress", h.SyncProgress)
 
-		api.POST("/browse/list", h.BrowseList)
-		api.POST("/browse/dirs", h.BrowseDirs)
+		protected.POST("/browse/list", h.BrowseList)
+		protected.POST("/browse/dirs", h.BrowseDirs)
 
-		api.GET("/sync/status", h.SyncStatus)
+		protected.GET("/sync/status", h.SyncStatus)
+
+		protected.GET("/openlist/copy-tasks", h.OpenListCopyTasks)
 	}
 
 	if staticFS != nil {

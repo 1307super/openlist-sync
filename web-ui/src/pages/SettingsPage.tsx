@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useSettings } from "../hooks/useSettings";
-import { Loader2, CheckCircle2, XCircle, Server, Bot, Save } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Server, Bot, Save, Shield } from "lucide-react";
 
 export default function SettingsPage() {
   const {
@@ -18,6 +18,8 @@ export default function SettingsPage() {
     openlist_token: "",
     tg_bot_token: "",
     tg_chat_id: "",
+    auth_username: "",
+    auth_password: "",
   });
 
   useEffect(() => {
@@ -27,11 +29,17 @@ export default function SettingsPage() {
         openlist_token: settings.openlist_token ?? "",
         tg_bot_token: settings.tg_bot_token ?? "",
         tg_chat_id: settings.tg_chat_id ?? "",
+        auth_username: settings.auth_username ?? "",
+        auth_password: "",
       });
     }
   }, [settings]);
 
-  const handleSave = () => updateSettings(form);
+  const handleSave = () => {
+    const data: Record<string, string> = { ...form };
+    if (!data.auth_password) delete data.auth_password;
+    updateSettings(data);
+  };
   const handleTest = () => testConnection(form);
 
   const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -151,6 +159,41 @@ export default function SettingsPage() {
           </Field>
           <p className="text-xs text-slate-500 -mt-2">
             仅该 Chat ID 可操作机器人，留空则不限制。保存后自动生效。
+          </p>
+        </div>
+      </section>
+
+      <section className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+        <div className="flex items-center gap-2.5 px-6 py-4 border-b border-slate-700/50 bg-slate-800/80">
+          <Shield className="w-4 h-4 text-primary" />
+          <h2 className="text-sm font-semibold text-white tracking-wide uppercase">
+            账户安全
+          </h2>
+        </div>
+
+        <div className="p-6 space-y-5">
+          <Field label="用户名" htmlFor="authUsername">
+            <input
+              id="authUsername"
+              type="text"
+              className="input"
+              value={form.auth_username}
+              onChange={set("auth_username")}
+            />
+          </Field>
+
+          <Field label="新密码" htmlFor="authPassword">
+            <input
+              id="authPassword"
+              type="password"
+              className="input"
+              placeholder="留空则不修改"
+              value={form.auth_password}
+              onChange={set("auth_password")}
+            />
+          </Field>
+          <p className="text-xs text-slate-500 -mt-2">
+            修改密码后需重新登录。默认用户名和密码均为 admin。
           </p>
         </div>
       </section>

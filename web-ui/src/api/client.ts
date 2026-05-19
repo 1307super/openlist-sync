@@ -5,23 +5,46 @@ import type {
   Settings,
   BrowseResponse,
   TestConnectionResult,
-  SyncCycleResult,
-  PaginatedResponse,
   SyncProgress,
+  CopyTaskProgress,
+  PaginatedResponse,
 } from "../types";
 
 const BASE = "/api";
+
+let onUnauthorized: (() => void) | null = null;
+
+export function setOnUnauthorized(fn: () => void) {
+  onUnauthorized = fn;
+}
+
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem("auth_token");
+  if (token) {
+    return { Authorization: `Bearer ${token}` };
+  }
+  return {};
+}
 
 async function request<T>(
   method: string,
   path: string,
   body?: unknown
 ): Promise<T> {
+  const headers: Record<string, string> = { ...getAuthHeaders() };
+  if (body) {
+    headers["Content-Type"] = "application/json";
+  }
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (res.status === 401) {
+    localStorage.removeItem("auth_token");
+    onUnauthorized?.();
+    throw new Error("未登录");
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }));
     throw new Error(err.message || `HTTP ${res.status}`);
@@ -29,7 +52,6 @@ async function request<T>(
   return res.json();
 }
 
-// Settings API
 export const settingsApi = {
   get: () => request<Settings>("GET", "/settings"),
   update: (data: Partial<Settings>) =>
@@ -37,7 +59,6 @@ export const settingsApi = {
   test: () => request<TestConnectionResult>("POST", "/settings/test"),
 };
 
-// Tasks API
 export const tasksApi = {
   list: () => request<SyncTask[]>("GET", "/tasks"),
   get: (id: number) => request<SyncTask>("GET", `/tasks/${id}`),
@@ -61,7 +82,6 @@ export const tasksApi = {
     request<{ success: boolean }>("DELETE", `/tasks/${id}/jobs/${jobId}`),
 };
 
-// Browse API
 export const browseApi = {
   list: (path: string, page: number = 1, perPage: number = 100) =>
     request<BrowseResponse>("POST", "/browse/list", {
@@ -86,4 +106,13 @@ export const syncApi = {
     }>("GET", "/sync/status"),
   progress: (taskId: number) =>
     request<SyncProgress>("GET", `/tasks/${taskId}/progress`),
+};
+
+export const openlistApi = {
+  copyTasks: () =>
+    request<{
+      tasks: CopyTaskProgress[];
+      count: number;
+      error?: string;
+    }>("GET", "/openlist/copy-tasks"),
 };

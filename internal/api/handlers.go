@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/user/openlist-sync/internal/auth"
 	"github.com/user/openlist-sync/internal/database"
 	"github.com/user/openlist-sync/internal/openlist"
 	"github.com/user/openlist-sync/internal/scheduler"
@@ -42,9 +43,12 @@ func (h *Handlers) GetSettings(c *gin.Context) {
 		"openlist_token":    "",
 		"tg_bot_token":      "",
 		"tg_chat_id":        "",
+		"auth_username":     "",
 	}
 	for k, v := range settings {
-		result[k] = v
+		if k != "auth_password" {
+			result[k] = v
+		}
 	}
 	c.JSON(http.StatusOK, result)
 }
@@ -61,11 +65,17 @@ func (h *Handlers) UpdateSettings(c *gin.Context) {
 		"openlist_token":    true,
 		"tg_bot_token":      true,
 		"tg_chat_id":        true,
+		"auth_username":     true,
+		"auth_password":     true,
 	}
 
 	for k, v := range body {
 		if allowed[k] {
-			if err := database.UpsertSetting(h.db, k, v); err != nil {
+			val := v
+			if k == "auth_password" {
+				val = auth.HashPassword(v)
+			}
+			if err := database.UpsertSetting(h.db, k, val); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
 			}
@@ -368,6 +378,32 @@ func (h *Handlers) SyncStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"runningCount": runningCount,
 		"tasks":        taskList,
+	})
+}
+
+func (h *Handlers) OpenListCopyTasks(c *gin.Context) {
+	copyTasks, err := h.client.GetCopyTasks()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"tasks": []gin.H{}, "error": err.Error()})
+		return
+	}
+
+	tasks := make([]gin.H, 0, len(copyTasks))
+	for _, t := range copyTasks {
+		tasks = append(tasks, gin.H{
+			"id":         t.ID,
+			"name":       t.Name,
+			"state":      t.State,
+			"status":     t.Status,
+			"progress":   t.Progress,
+			"totalBytes": t.TotalBytes,
+			"error":      t.Error,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"tasks": tasks,
+		"count": len(tasks),
 	})
 }
 

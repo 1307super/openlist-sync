@@ -2,8 +2,10 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Loader2, FolderSync } from "lucide-react";
 import { useTasks } from "../hooks/useTasks";
+import { useOpenListCopyTasks } from "../hooks/useOpenListCopyTasks";
 import TaskCard from "../components/TaskCard";
 import TaskForm from "../components/TaskForm";
+import GlobalProgress from "../components/GlobalProgress";
 import type { SyncTask } from "../types";
 
 export default function TasksPage() {
@@ -32,6 +34,7 @@ export default function TasksPage() {
   }, []);
 
   const hasRunning = tasks.some((t) => t.status === "running");
+  const copyTasks = useOpenListCopyTasks();
 
   useEffect(() => {
     if (!hasRunning) return;
@@ -78,7 +81,7 @@ export default function TasksPage() {
   };
 
   return (
-    <div className="p-4 md:p-6 lg:p-8 max-w-4xl mx-auto">
+    <div className="p-4 md:p-6 lg:p-8 max-w-7xl mx-auto">
       {(showForm || editingTask) && (
         <TaskForm
           mode={editingTask ? "edit" : "create"}
@@ -104,6 +107,8 @@ export default function TasksPage() {
         </button>
       </div>
 
+      {copyTasks.length > 0 && <GlobalProgress tasks={copyTasks} />}
+
       {loading ? (
         <div className="flex items-center justify-center py-20 text-slate-500">
           <Loader2 className="w-6 h-6 animate-spin" />
@@ -122,7 +127,7 @@ export default function TasksPage() {
           </button>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {tasks.map((task) => (
             <TaskCard
               key={task.id}

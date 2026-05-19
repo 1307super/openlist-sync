@@ -1,12 +1,12 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { FolderSync, ListTodo, Settings } from "lucide-react";
+import { FolderSync, ListTodo, Settings, LogOut } from "lucide-react";
 
 const navItems = [
   { to: "/", icon: ListTodo, label: "任务管理" },
   { to: "/settings", icon: Settings, label: "设置" },
 ];
 
-function Sidebar() {
+function Sidebar({ onLogout }: { onLogout: () => void }) {
   return (
     <aside className="hidden md:flex md:flex-col md:w-64 md:shrink-0 bg-slate-900 border-r border-slate-800">
       <div className="flex items-center gap-3 px-6 py-5 border-b border-slate-800">
@@ -34,6 +34,15 @@ function Sidebar() {
           </NavLink>
         ))}
       </nav>
+      <div className="mt-auto p-3 border-t border-slate-800">
+        <button
+          onClick={onLogout}
+          className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-slate-500 hover:bg-slate-800/50 hover:text-slate-300 transition-colors w-full"
+        >
+          <LogOut className="w-5 h-5" />
+          退出登录
+        </button>
+      </div>
     </aside>
   );
 }
@@ -64,10 +73,10 @@ function BottomNav() {
   );
 }
 
-export default function Layout() {
+export default function Layout({ onLogout }: { onLogout: () => void }) {
   return (
     <div className="flex h-screen bg-slate-950 text-white">
-      <Sidebar />
+      <Sidebar onLogout={onLogout} />
       <main className="flex-1 overflow-y-auto pb-20 md:pb-0">
         <Outlet />
       </main>
