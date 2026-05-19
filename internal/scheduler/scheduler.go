@@ -75,15 +75,11 @@ func (s *Scheduler) StartTask(taskID int64, intervalSec int64) {
 // runSyncSafe runs a sync with panic recovery and proper running flag cleanup.
 func (s *Scheduler) runSyncSafe(taskID int64) {
 	s.mu.Lock()
-	isRunning := s.running[taskID]
-	s.mu.Unlock()
-
-	if isRunning {
+	if s.running[taskID] {
+		s.mu.Unlock()
 		log.Printf("[scheduler] task %d already running, skipping", taskID)
 		return
 	}
-
-	s.mu.Lock()
 	s.running[taskID] = true
 	s.mu.Unlock()
 
@@ -107,12 +103,11 @@ func (s *Scheduler) runSyncSafe(taskID int64) {
 // This is the unified entry point — both scheduler and API handlers use this.
 func (s *Scheduler) TriggerSync(taskID int64) bool {
 	s.mu.Lock()
-	isRunning := s.running[taskID]
-	s.mu.Unlock()
-
-	if isRunning {
+	if s.running[taskID] {
+		s.mu.Unlock()
 		return false
 	}
+	s.mu.Unlock()
 
 	go s.runSyncSafe(taskID)
 	return true

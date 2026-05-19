@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -191,8 +192,6 @@ func (c *Client) ListDirs(path string) (*ListResponse, error) {
 	if raw.Code != 200 {
 		return nil, fmt.Errorf("list dirs: %s", raw.Msg)
 	}
-	// /api/fs/dirs only returns directories but does not include is_dir in response.
-	// Set IsDir = true explicitly since every item is inherently a directory.
 	for i := range raw.Data {
 		raw.Data[i].IsDir = true
 	}
@@ -277,60 +276,6 @@ func (c *Client) fetchCopyTasks(endpoint string) ([]CopyTaskInfo, error) {
 	return result.Data, nil
 }
 
-func (c *Client) WaitForCopy(taskID string, interval time.Duration) error {
-	appeared := false
-	consecutiveNetErrors := 0
-	staleCount := 0
-	startTime := time.Now()
-	const maxNetErrors = 2
-	const maxStale = 720
-	const instantCompleteWait = 60 * time.Second
-
-	for {
-		tasks, err := c.GetCopyTasks()
-		if err != nil {
-			consecutiveNetErrors++
-			if consecutiveNetErrors >= maxNetErrors {
-				return fmt.Errorf("GetCopyTasks failed %d times: %w", consecutiveNetErrors, err)
-			}
-			time.Sleep(interval)
-			continue
-		}
-		consecutiveNetErrors = 0
-
-		found := false
-		for _, t := range tasks {
-			if t.ID == taskID {
-				found = true
-				appeared = true
-				staleCount++
-				if t.State == 3 {
-					if t.Error != "" {
-						return fmt.Errorf("copy task error: %s", t.Error)
-					}
-					return fmt.Errorf("copy task cancelled or failed (state=3)")
-				}
-				break
-			}
-		}
-
-		if !found {
-			if appeared {
-				return nil
-			}
-			if time.Since(startTime) >= instantCompleteWait {
-				return nil
-			}
-		} else {
-			if staleCount > maxStale {
-				return fmt.Errorf("copy task stuck for over 2 hours")
-			}
-		}
-
-		time.Sleep(interval)
-	}
-}
-
 func (c *Client) TestConnection() error {
 	if err := c.Authenticate(); err != nil {
 		return err
@@ -339,14 +284,11 @@ func (c *Client) TestConnection() error {
 	return err
 }
 
-// FileEntry holds a file's relative path from the scan root.
 type FileEntry struct {
 	RelPath string
 	Size    int64
 }
 
-// ScanAllFilesRecursive recursively scans dirPath and returns all files
-// with paths relative to dirPath. Directories are traversed but not included.
 func (c *Client) ScanAllFilesRecursive(dirPath string) ([]FileEntry, error) {
 	var entries []FileEntry
 	var scan func(currentPath, relPrefix string) error
@@ -359,6 +301,9 @@ func (c *Client) ScanAllFilesRecursive(dirPath string) ([]FileEntry, error) {
 				return fmt.Errorf("scan %s page %d: %w", currentPath, page, err)
 			}
 			for _, f := range resp.Content {
+				if strings.HasPrefix(f.Name, ".") {
+					continue
+				}
 				rel := relPrefix + f.Name
 				if f.IsDir {
 					subPath := currentPath

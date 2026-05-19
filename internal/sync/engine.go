@@ -87,7 +87,9 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 		return result
 	}
 
-	missing := CompareFilesRecursive(sourceFiles, destFiles, task.MatchMode)
+	pendingFiles, _ := database.GetPendingCopyFiles(e.db, taskID)
+
+	missing := CompareFilesRecursive(sourceFiles, destFiles, task.MatchMode, pendingFiles)
 	result.Missing = len(missing)
 	result.Skipped = result.Scanned - result.Missing
 
@@ -105,6 +107,7 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 	skipExisting := task.ReplaceRule == "skip"
 
 	var items []CopyItem
+	var jobIDs []int64
 	for _, f := range missing {
 		srcDir, dstDir, fileName := RelPathToCopyDirs(f.RelPath, task.SourcePath, task.DestPath)
 		items = append(items, CopyItem{
@@ -112,6 +115,9 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 			SrcDir:   srcDir,
 			DstDir:   dstDir,
 		})
+		// 复制开始前就记录为 pending，防止下次扫描重复提交
+		jobID, _ := database.InsertCopyJob(e.db, taskID, fileName, srcDir, dstDir)
+		jobIDs = append(jobIDs, jobID)
 	}
 
 	copyResults := e.copier.CopyFiles(items, overwrite, skipExisting)
@@ -119,17 +125,15 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 	var deletedNames []string
 	var deletedSrcDirs []string
 	for i, cr := range copyResults {
-		jobID, _ := database.InsertCopyJob(e.db, taskID, items[i].FileName, items[i].SrcDir, items[i].DstDir)
-
 		if cr.Error != nil {
 			result.Failed++
 			errStr := cr.Error.Error()
-			database.UpdateCopyJobStatus(e.db, jobID, "failed", nil, &errStr)
+			database.UpdateCopyJobStatus(e.db, jobIDs[i], "failed", nil, &errStr)
 			database.InsertLog(e.db, taskID, "error",
 				fmt.Sprintf("复制失败: %s → %v", items[i].FileName, cr.Error), nil)
 		} else {
 			result.Copied++
-			database.UpdateCopyJobStatus(e.db, jobID, "completed", nil, nil)
+			database.UpdateCopyJobStatus(e.db, jobIDs[i], "completed", nil, nil)
 			database.InsertLog(e.db, taskID, "info",
 				fmt.Sprintf("复制成功: %s", items[i].FileName), nil)
 			deletedNames = append(deletedNames, items[i].FileName)

@@ -416,6 +416,24 @@ func IncrementCopyJobRetry(db *sql.DB, id int64) error {
 	return err
 }
 
+func GetPendingCopyFiles(db *sql.DB, taskID int64) (map[string]struct{}, error) {
+	rows, err := db.Query("SELECT file_name FROM copy_jobs WHERE task_id = ? AND status = 'pending'", taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	m := make(map[string]struct{})
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		m[name] = struct{}{}
+	}
+	return m, rows.Err()
+}
+
 func GetEnabledTasks(db *sql.DB) ([]SyncTask, error) {
 	rows, err := db.Query(`SELECT id, name, source_path, dest_path, completion_rule, replace_rule, match_mode,
 		scan_interval_sec, enabled, status, last_scan_at, last_sync_at, error, created_at, updated_at

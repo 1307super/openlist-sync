@@ -45,8 +45,7 @@ export default function TaskForm({
     return Object.keys(e).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = () => {
     if (!validate()) return;
     onSubmit({
       name: name.trim(),
@@ -85,19 +84,19 @@ export default function TaskForm({
       )}
 
       <div
-        className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+        className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
         onClick={(e) => {
           if (e.target === e.currentTarget) onCancel();
         }}
       >
-        <div className="w-full max-w-lg mx-4 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden">
-          <div className="px-6 py-4 border-b border-slate-800">
+        <div className="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-xl shadow-2xl flex flex-col max-h-[calc(100vh-2rem)]">
+          <div className="px-6 py-4 border-b border-slate-800 shrink-0">
             <h3 className="text-base font-semibold text-white">
               {mode === "create" ? "创建同步任务" : "编辑同步任务"}
             </h3>
           </div>
 
-          <form onSubmit={handleSubmit} className="p-6 space-y-5">
+          <div className="overflow-y-auto flex-1 min-h-0 p-6 space-y-5">
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1.5">
                 任务名称
@@ -314,23 +313,24 @@ export default function TaskForm({
                 300 = 5分钟，60 = 1分钟
               </p>
             </div>
+          </div>
 
-            <div className="flex items-center justify-end gap-3 pt-2">
-              <button
-                type="button"
-                onClick={onCancel}
-                className="px-4 py-2 text-sm font-medium text-slate-400 hover:text-white transition-colors"
-              >
-                取消
-              </button>
-              <button
-                type="submit"
-                className="px-5 py-2 text-sm font-medium bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
-              >
-                {mode === "create" ? "创建任务" : "保存修改"}
-              </button>
-            </div>
-          </form>
+          <div className="px-6 py-4 border-t border-slate-800 shrink-0 flex items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="px-4 py-2 text-sm font-medium text-slate-400 hover:text-white transition-colors"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={handleSubmit}
+              className="px-5 py-2 text-sm font-medium bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
+            >
+              {mode === "create" ? "创建任务" : "保存修改"}
+            </button>
+          </div>
         </div>
       </div>
     </>

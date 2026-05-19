@@ -73,8 +73,6 @@ func (cp *Copier) CopyFiles(items []CopyItem, overwrite, skipExisting bool) []Co
 	startTime := time.Now()
 	const pollInterval = 5 * time.Second
 	const instantWait = 60 * time.Second
-	const staleLimit = 720
-	staleCount := 0
 
 	for len(pending) > 0 {
 		undone, err := cp.client.GetCopyTasks()
@@ -107,9 +105,11 @@ func (cp *Copier) CopyFiles(items []CopyItem, overwrite, skipExisting bool) []Co
 		now := time.Now()
 		for idx := range pending {
 			if foundNow[idx] {
+				// 任务仍在 undone 列表中（正在执行），继续等待
 				continue
 			}
 			if !appeared[idx] {
+				// 提交后从未在 undone 列表中出现
 				if now.Sub(startTime) > instantWait {
 					results[idx] = CopyResult{FileName: items[idx].FileName, Error: fmt.Errorf("提交后未在任务列表中发现该任务（已等待60秒）")}
 					delete(pending, idx)
@@ -117,21 +117,12 @@ func (cp *Copier) CopyFiles(items []CopyItem, overwrite, skipExisting bool) []Co
 				continue
 			}
 
+			// 曾出现过但现在不在 undone 列表了，检查是否已完成
 			if cp.confirmDone(items[idx].SrcDir, items[idx].FileName) {
 				delete(pending, idx)
 			} else {
 				results[idx] = CopyResult{FileName: items[idx].FileName, Error: fmt.Errorf("复制任务异常结束（未在已完成列表中找到）")}
 				delete(pending, idx)
-			}
-		}
-
-		if len(pending) > 0 && len(foundNow) > 0 {
-			staleCount++
-			if staleCount > staleLimit {
-				for idx := range pending {
-					results[idx] = CopyResult{FileName: items[idx].FileName, Error: fmt.Errorf("复制超时（超过2小时）")}
-					delete(pending, idx)
-				}
 			}
 		}
 
