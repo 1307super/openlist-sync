@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"path"
 	stdsync "sync"
 	"time"
 
@@ -96,62 +97,112 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 	if len(missing) == 0 {
 		database.InsertLog(e.db, taskID, "info",
 			fmt.Sprintf("未发现缺失文件（跳过 %d 个已存在）", result.Skipped), nil)
-		e.finishSync(taskID, &result, start)
-		return result
-	}
-
-	database.InsertLog(e.db, taskID, "info",
-		fmt.Sprintf("发现 %d 个缺失文件（跳过 %d 个已存在），开始复制...", len(missing), result.Skipped), nil)
-
-	availableSlots := e.copier.concurrency - len(pendingFiles)
-	if availableSlots <= 0 {
+	} else {
 		database.InsertLog(e.db, taskID, "info",
-			fmt.Sprintf("已有 %d 个复制任务等待完成，达到并发上限 %d，本轮不提交新任务", len(pendingFiles), e.copier.concurrency), nil)
-		e.finishSync(taskID, &result, start)
-		return result
-	}
-	if len(missing) > availableSlots {
-		database.InsertLog(e.db, taskID, "info",
-			fmt.Sprintf("并发上限 %d，已有 %d 个等待完成，本轮只提交 %d 个新任务", e.copier.concurrency, len(pendingFiles), availableSlots), nil)
-		missing = missing[:availableSlots]
-	}
+			fmt.Sprintf("发现 %d 个缺失文件（跳过 %d 个已存在），开始复制...", len(missing), result.Skipped), nil)
 
-	overwrite := task.ReplaceRule == "overwrite"
-	skipExisting := task.ReplaceRule == "skip"
-
-	var items []CopyItem
-	var jobIDs []int64
-	for _, f := range missing {
-		srcDir, dstDir, fileName := RelPathToCopyDirs(f.RelPath, task.SourcePath, task.DestPath)
-		items = append(items, CopyItem{
-			FileName: fileName,
-			SrcDir:   srcDir,
-			DstDir:   dstDir,
-		})
-		// 复制开始前就记录为 pending，防止下次扫描重复提交
-		jobID, _ := database.InsertCopyJob(e.db, taskID, fileName, srcDir, dstDir)
-		jobIDs = append(jobIDs, jobID)
-	}
-
-	copyResults := e.copier.CopyFiles(items, overwrite, skipExisting)
-
-	for i, cr := range copyResults {
-		if cr.Error != nil {
-			result.Failed++
-			errStr := cr.Error.Error()
-			database.UpdateCopyJobStatus(e.db, jobIDs[i], "failed", nil, &errStr)
-			database.InsertLog(e.db, taskID, "error",
-				fmt.Sprintf("复制失败: %s → %v", items[i].FileName, cr.Error), nil)
-		} else {
-			result.Skipped++
-			result.Missing--
+		availableSlots := e.copier.concurrency - len(pendingFiles)
+		if availableSlots <= 0 {
 			database.InsertLog(e.db, taskID, "info",
-				fmt.Sprintf("复制任务已提交，等待后台确认完成: %s", items[i].FileName), nil)
+				fmt.Sprintf("已有 %d 个复制任务等待完成，达到并发上限 %d，本轮不提交新任务", len(pendingFiles), e.copier.concurrency), nil)
+		} else {
+			if len(missing) > availableSlots {
+				database.InsertLog(e.db, taskID, "info",
+					fmt.Sprintf("并发上限 %d，已有 %d 个等待完成，本轮只提交 %d 个新任务", e.copier.concurrency, len(pendingFiles), availableSlots), nil)
+				missing = missing[:availableSlots]
+			}
+
+			overwrite := task.ReplaceRule == "overwrite"
+			skipExisting := task.ReplaceRule == "skip"
+
+			var items []CopyItem
+			var jobIDs []int64
+			for _, f := range missing {
+				srcDir, dstDir, fileName := RelPathToCopyDirs(f.RelPath, task.SourcePath, task.DestPath)
+				items = append(items, CopyItem{
+					FileName: fileName,
+					SrcDir:   srcDir,
+					DstDir:   dstDir,
+				})
+				jobID, _ := database.InsertCopyJob(e.db, taskID, fileName, srcDir, dstDir)
+				jobIDs = append(jobIDs, jobID)
+			}
+
+			copyResults := e.copier.CopyFiles(items, overwrite, skipExisting)
+
+			for i, cr := range copyResults {
+				if cr.Error != nil {
+					result.Failed++
+					errStr := cr.Error.Error()
+					database.UpdateCopyJobStatus(e.db, jobIDs[i], "failed", nil, &errStr)
+					database.InsertLog(e.db, taskID, "error",
+						fmt.Sprintf("复制失败: %s → %v", items[i].FileName, cr.Error), nil)
+				} else {
+					result.Skipped++
+					result.Missing--
+					database.InsertLog(e.db, taskID, "info",
+						fmt.Sprintf("复制任务已提交，等待后台确认完成: %s", items[i].FileName), nil)
+				}
+			}
+		}
+	}
+
+	// 清理源目录下的空目录
+	if task.DeleteEmptyDirs {
+		deleted, err := e.cleanEmptyDirs(taskID, task.SourcePath, task.SourcePath)
+		if err != nil {
+			database.InsertLog(e.db, taskID, "error",
+				fmt.Sprintf("清理空目录失败: %v", err), nil)
+		} else if deleted > 0 {
+			result.Deleted = deleted
+			database.InsertLog(e.db, taskID, "info",
+				fmt.Sprintf("已清理 %d 个空目录", deleted), nil)
 		}
 	}
 
 	e.finishSync(taskID, &result, start)
 	return result
+}
+
+// cleanEmptyDirs 递归删除空目录。rootPath 是源目录（不会被删除），currentPath 是当前递归路径。
+func (e *Engine) cleanEmptyDirs(taskID int64, rootPath, currentPath string) (int, error) {
+	dirsResp, err := e.client.ListDirs(currentPath)
+	if err != nil {
+		return 0, fmt.Errorf("list dirs %s: %w", currentPath, err)
+	}
+
+	deleted := 0
+
+	// 先递归处理子目录
+	for _, d := range dirsResp.Content {
+		subPath := path.Join(currentPath, d.Name)
+		n, err := e.cleanEmptyDirs(taskID, rootPath, subPath)
+		if err != nil {
+			return deleted, err
+		}
+		deleted += n
+	}
+
+	// 不删除源目录本身
+	if currentPath == rootPath {
+		return deleted, nil
+	}
+
+	// 检查当前目录是否为空
+	resp, err := e.client.ListDir(currentPath, 1, 1)
+	if err != nil {
+		return deleted, fmt.Errorf("check empty %s: %w", currentPath, err)
+	}
+	if resp.Total == 0 {
+		parentDir := path.Dir(currentPath)
+		dirName := path.Base(currentPath)
+		if err := e.client.Remove(parentDir, []string{dirName}); err != nil {
+			return deleted, fmt.Errorf("remove empty dir %s: %w", currentPath, err)
+		}
+		deleted++
+	}
+
+	return deleted, nil
 }
 
 func (e *Engine) finishSync(taskID int64, result *SyncResult, start time.Time) {

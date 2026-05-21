@@ -8,6 +8,7 @@ export interface SyncTask {
   matchMode: "exact" | "smart";
   scanIntervalSec: number;
   enabled: boolean;
+  deleteEmptyDirs: boolean;
   status: "idle" | "running" | "paused" | "error";
   lastScanAt: string | null;
   lastSyncAt: string | null;

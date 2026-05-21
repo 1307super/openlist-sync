@@ -16,6 +16,7 @@ type SyncTask struct {
 	MatchMode       string
 	ScanIntervalSec int64
 	Enabled         bool
+	DeleteEmptyDirs bool
 	Status          string
 	LastScanAt      *int64
 	LastSyncAt      *int64
@@ -34,6 +35,7 @@ type SyncTaskJSON struct {
 	MatchMode       string  `json:"matchMode"`
 	ScanIntervalSec int64   `json:"scanIntervalSec"`
 	Enabled         bool    `json:"enabled"`
+	DeleteEmptyDirs bool    `json:"deleteEmptyDirs"`
 	Status          string  `json:"status"`
 	LastScanAt      *string `json:"lastScanAt"`
 	LastSyncAt      *string `json:"lastSyncAt"`
@@ -51,6 +53,7 @@ type TaskCreateRequest struct {
 	MatchMode       *string `json:"matchMode"`
 	ScanIntervalSec *int64  `json:"scanIntervalSec"`
 	Enabled         *bool   `json:"enabled"`
+	DeleteEmptyDirs *bool   `json:"deleteEmptyDirs"`
 }
 
 func (t *SyncTask) ToJSON() SyncTaskJSON {
@@ -64,6 +67,7 @@ func (t *SyncTask) ToJSON() SyncTaskJSON {
 		MatchMode:       t.MatchMode,
 		ScanIntervalSec: t.ScanIntervalSec,
 		Enabled:         t.Enabled,
+		DeleteEmptyDirs: t.DeleteEmptyDirs,
 		Status:          t.Status,
 		LastScanAt:      formatUnixPtr(t.LastScanAt),
 		LastSyncAt:      formatUnixPtr(t.LastSyncAt),
@@ -200,22 +204,24 @@ func GetSetting(db *sql.DB, key string) (string, error) {
 func scanTask(row interface{ Scan(...interface{}) error }) (*SyncTask, error) {
 	t := &SyncTask{}
 	var enabled int64
+	var deleteEmptyDirs int64
 	err := row.Scan(
 		&t.ID, &t.Name, &t.SourcePath, &t.DestPath,
 		&t.CompletionRule, &t.ReplaceRule, &t.MatchMode, &t.ScanIntervalSec,
-		&enabled, &t.Status, &t.LastScanAt, &t.LastSyncAt,
+		&enabled, &deleteEmptyDirs, &t.Status, &t.LastScanAt, &t.LastSyncAt,
 		&t.Error, &t.CreatedAt, &t.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 	t.Enabled = enabled != 0
+	t.DeleteEmptyDirs = deleteEmptyDirs != 0
 	return t, nil
 }
 
 func GetAllTasks(db *sql.DB) ([]SyncTask, error) {
 	rows, err := db.Query(`SELECT id, name, source_path, dest_path, completion_rule, replace_rule, match_mode,
-		scan_interval_sec, enabled, status, last_scan_at, last_sync_at, error, created_at, updated_at
+		scan_interval_sec, enabled, delete_empty_dirs, status, last_scan_at, last_sync_at, error, created_at, updated_at
 		FROM sync_tasks ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -235,7 +241,7 @@ func GetAllTasks(db *sql.DB) ([]SyncTask, error) {
 
 func GetTaskByID(db *sql.DB, id int64) (*SyncTask, error) {
 	row := db.QueryRow(`SELECT id, name, source_path, dest_path, completion_rule, replace_rule, match_mode,
-		scan_interval_sec, enabled, status, last_scan_at, last_sync_at, error, created_at, updated_at
+		scan_interval_sec, enabled, delete_empty_dirs, status, last_scan_at, last_sync_at, error, created_at, updated_at
 		FROM sync_tasks WHERE id = ?`, id)
 	return scanTask(row)
 }
@@ -249,11 +255,12 @@ func CreateTask(db *sql.DB, req TaskCreateRequest) (*SyncTask, error) {
 	replaceRule := valStr(req.ReplaceRule, "skip")
 	matchMode := valStr(req.MatchMode, "exact")
 	scanInterval := valInt64(req.ScanIntervalSec, 300)
+	deleteEmptyDirs := valBool(req.DeleteEmptyDirs, false)
 
 	res, err := db.Exec(`INSERT INTO sync_tasks
-		(name, source_path, dest_path, completion_rule, replace_rule, match_mode, scan_interval_sec, enabled, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'idle', ?, ?)`,
-		name, sourcePath, destPath, completionRule, replaceRule, matchMode, scanInterval, now, now)
+		(name, source_path, dest_path, completion_rule, replace_rule, match_mode, scan_interval_sec, enabled, delete_empty_dirs, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 'idle', ?, ?)`,
+		name, sourcePath, destPath, completionRule, replaceRule, matchMode, scanInterval, deleteEmptyDirs, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -275,6 +282,7 @@ func UpdateTask(db *sql.DB, id int64, req TaskCreateRequest) (*SyncTask, error) 
 	replaceRule := existing.ReplaceRule
 	matchMode := existing.MatchMode
 	scanInterval := existing.ScanIntervalSec
+	deleteEmptyDirs := existing.DeleteEmptyDirs
 
 	if req.Name != nil {
 		name = *req.Name
@@ -297,10 +305,13 @@ func UpdateTask(db *sql.DB, id int64, req TaskCreateRequest) (*SyncTask, error) 
 	if req.ScanIntervalSec != nil {
 		scanInterval = *req.ScanIntervalSec
 	}
+	if req.DeleteEmptyDirs != nil {
+		deleteEmptyDirs = *req.DeleteEmptyDirs
+	}
 
 	_, err = db.Exec(`UPDATE sync_tasks SET name=?, source_path=?, dest_path=?,
-		completion_rule=?, replace_rule=?, match_mode=?, scan_interval_sec=?, updated_at=? WHERE id=?`,
-		name, sourcePath, destPath, completionRule, replaceRule, matchMode, scanInterval, now, id)
+		completion_rule=?, replace_rule=?, match_mode=?, scan_interval_sec=?, delete_empty_dirs=?, updated_at=? WHERE id=?`,
+		name, sourcePath, destPath, completionRule, replaceRule, matchMode, scanInterval, deleteEmptyDirs, now, id)
 	if err != nil {
 		return nil, err
 	}
@@ -474,7 +485,7 @@ func CopyJobKey(srcDir, fileName string) string {
 
 func GetEnabledTasks(db *sql.DB) ([]SyncTask, error) {
 	rows, err := db.Query(`SELECT id, name, source_path, dest_path, completion_rule, replace_rule, match_mode,
-		scan_interval_sec, enabled, status, last_scan_at, last_sync_at, error, created_at, updated_at
+		scan_interval_sec, enabled, delete_empty_dirs, status, last_scan_at, last_sync_at, error, created_at, updated_at
 		FROM sync_tasks WHERE enabled = 1`)
 	if err != nil {
 		return nil, err
@@ -500,6 +511,13 @@ func valStr(ptr *string, def string) string {
 }
 
 func valInt64(ptr *int64, def int64) int64 {
+	if ptr != nil {
+		return *ptr
+	}
+	return def
+}
+
+func valBool(ptr *bool, def bool) bool {
 	if ptr != nil {
 		return *ptr
 	}

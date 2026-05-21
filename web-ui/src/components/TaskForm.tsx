@@ -31,6 +31,9 @@ export default function TaskForm({
   const [scanIntervalSec, setScanIntervalSec] = useState(
     task?.scanIntervalSec ?? 300
   );
+  const [deleteEmptyDirs, setDeleteEmptyDirs] = useState(
+    task?.deleteEmptyDirs ?? false
+  );
   const [pickerTarget, setPickerTarget] = useState<
     "source" | "dest" | null
   >(null);
@@ -55,6 +58,7 @@ export default function TaskForm({
       replaceRule,
       matchMode,
       scanIntervalSec,
+      deleteEmptyDirs,
       enabled: task?.enabled ?? true,
     });
   };
@@ -295,6 +299,19 @@ export default function TaskForm({
                   : "仅通过完整文件名匹配"}
               </p>
             </div>
+
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={deleteEmptyDirs}
+                onChange={(e) => setDeleteEmptyDirs(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-primary focus:ring-primary/50 focus:ring-offset-0"
+              />
+              <div>
+                <span className="text-sm text-slate-300">删除空目录</span>
+                <p className="text-xs text-slate-500 mt-0.5">同步后递归删除源目录下的空子目录（源目录本身不会被删除）</p>
+              </div>
+            </label>
 
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1.5">

@@ -53,6 +53,7 @@ var migrations = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS copy_jobs_task_status_idx ON copy_jobs(task_id, status)`,
 	`ALTER TABLE sync_tasks ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'exact'`,
+	`ALTER TABLE sync_tasks ADD COLUMN delete_empty_dirs INTEGER NOT NULL DEFAULT 0`,
 }
 
 func InitDB(dbPath string) (*sql.DB, error) {
