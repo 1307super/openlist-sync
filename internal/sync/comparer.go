@@ -14,8 +14,13 @@ var (
 	extractSERe = regexp.MustCompile(`[Ss](\d+)[Ee](\d+)`)
 )
 
-func CompareFilesRecursive(src, dest []openlist.FileEntry, matchMode, srcRoot string, pendingFiles map[string]struct{}) []openlist.FileEntry {
-	var missing []openlist.FileEntry
+type CompareResult struct {
+	Matched []openlist.FileEntry // 目标已存在，跳过
+	Missing []openlist.FileEntry // 目标不存在，需要复制
+}
+
+func CompareFilesRecursive(src, dest []openlist.FileEntry, matchMode, srcRoot string, pendingFiles map[string]struct{}) CompareResult {
+	var result CompareResult
 
 	for _, f := range src {
 		fileName := path.Base(f.RelPath)
@@ -27,18 +32,19 @@ func CompareFilesRecursive(src, dest []openlist.FileEntry, matchMode, srcRoot st
 
 		if matchMode == "smart" {
 			if smartMatch(fileName, dest) {
+				result.Matched = append(result.Matched, f)
 				continue
 			}
 		}
 
-		// smart 模式下非 S##E## 文件也走精确匹配，.cas 文件正确跳过
 		if exactMatch(fileName, dest) {
+			result.Matched = append(result.Matched, f)
 			continue
 		}
 
-		missing = append(missing, f)
+		result.Missing = append(result.Missing, f)
 	}
-	return missing
+	return result
 }
 
 func smartMatch(srcFileName string, dest []openlist.FileEntry) bool {

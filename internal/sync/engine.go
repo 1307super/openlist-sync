@@ -90,17 +90,28 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 
 	pendingFiles, _ := database.GetPendingCopyFiles(e.db, taskID)
 
-	missing := CompareFilesRecursive(sourceFiles, destFiles, task.MatchMode, task.SourcePath, pendingFiles)
-	result.Missing = len(missing)
-	result.Skipped = result.Scanned - result.Missing
+	cmpResult := CompareFilesRecursive(sourceFiles, destFiles, task.MatchMode, task.SourcePath, pendingFiles)
+	result.Missing = len(cmpResult.Missing)
+	result.Skipped = len(cmpResult.Matched)
 
-	if len(missing) == 0 {
+	// 删除目标已存在的源文件（匹配到的跳过文件）
+	if task.CompletionRule == "delete_source" && len(cmpResult.Matched) > 0 {
+		deleted, err := e.deleteMatchedSourceFiles(taskID, task.SourcePath, cmpResult.Matched)
+		if err != nil {
+			database.InsertLog(e.db, taskID, "error",
+				fmt.Sprintf("删除已匹配源文件失败: %v", err), nil)
+		}
+		result.Deleted += deleted
+	}
+
+	if len(cmpResult.Missing) == 0 {
 		database.InsertLog(e.db, taskID, "info",
 			fmt.Sprintf("未发现缺失文件（跳过 %d 个已存在）", result.Skipped), nil)
 	} else {
 		database.InsertLog(e.db, taskID, "info",
-			fmt.Sprintf("发现 %d 个缺失文件（跳过 %d 个已存在），开始复制...", len(missing), result.Skipped), nil)
+			fmt.Sprintf("发现 %d 个缺失文件（跳过 %d 个已存在），开始复制...", len(cmpResult.Missing), result.Skipped), nil)
 
+		missing := cmpResult.Missing
 		availableSlots := e.copier.concurrency - len(pendingFiles)
 		if availableSlots <= 0 {
 			database.InsertLog(e.db, taskID, "info",
@@ -154,7 +165,7 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 			database.InsertLog(e.db, taskID, "error",
 				fmt.Sprintf("清理空目录失败: %v", err), nil)
 		} else if deleted > 0 {
-			result.Deleted = deleted
+			result.Deleted += deleted
 			database.InsertLog(e.db, taskID, "info",
 				fmt.Sprintf("已清理 %d 个空目录", deleted), nil)
 		}
@@ -162,6 +173,30 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 
 	e.finishSync(taskID, &result, start)
 	return result
+}
+
+// deleteMatchedSourceFiles 删除目标已存在的源文件，按目录分组批量删除
+func (e *Engine) deleteMatchedSourceFiles(taskID int64, srcRoot string, matched []openlist.FileEntry) (int, error) {
+	grouped := make(map[string][]string)
+	for _, f := range matched {
+		srcDir, _, fileName := RelPathToCopyDirs(f.RelPath, srcRoot, "")
+		grouped[srcDir] = append(grouped[srcDir], fileName)
+	}
+
+	deleted := 0
+	for dir, names := range grouped {
+		if err := e.client.Remove(dir, names); err != nil {
+			database.InsertLog(e.db, taskID, "error",
+				fmt.Sprintf("删除源文件失败 %s: %v", dir, err), nil)
+			continue
+		}
+		deleted += len(names)
+		for _, name := range names {
+			database.InsertLog(e.db, taskID, "info",
+				fmt.Sprintf("已删除源文件（目标已存在）: %s", name), nil)
+		}
+	}
+	return deleted, nil
 }
 
 // cleanEmptyDirs 递归删除空目录。rootPath 是源目录（不会被删除），currentPath 是当前递归路径。
