@@ -160,7 +160,7 @@ func (e *Engine) RunSync(taskID int64) SyncResult {
 
 	// 清理源目录下的空目录
 	if task.DeleteEmptyDirs {
-		deleted, err := e.cleanEmptyDirs(taskID, task.SourcePath, task.SourcePath)
+		deleted, err := e.cleanEmptyDirs(taskID, task.SourcePath, task.SourcePath, task.MatchMode)
 		if err != nil {
 			database.InsertLog(e.db, taskID, "error",
 				fmt.Sprintf("清理空目录失败: %v", err), nil)
@@ -200,7 +200,7 @@ func (e *Engine) deleteMatchedSourceFiles(taskID int64, srcRoot string, matched 
 }
 
 // cleanEmptyDirs 递归删除空目录。rootPath 是源目录（不会被删除），currentPath 是当前递归路径。
-func (e *Engine) cleanEmptyDirs(taskID int64, rootPath, currentPath string) (int, error) {
+func (e *Engine) cleanEmptyDirs(taskID int64, rootPath, currentPath, matchMode string) (int, error) {
 	dirsResp, err := e.client.ListDirs(currentPath)
 	if err != nil {
 		return 0, fmt.Errorf("list dirs %s: %w", currentPath, err)
@@ -211,19 +211,19 @@ func (e *Engine) cleanEmptyDirs(taskID int64, rootPath, currentPath string) (int
 	// 先递归处理子目录
 	for _, d := range dirsResp.Content {
 		subPath := path.Join(currentPath, d.Name)
-		n, err := e.cleanEmptyDirs(taskID, rootPath, subPath)
+		n, err := e.cleanEmptyDirs(taskID, rootPath, subPath, matchMode)
 		if err != nil {
 			return deleted, err
 		}
 		deleted += n
 	}
 
-	// 不删除源目录本身
-	if currentPath == rootPath {
+	// 精确模式下不删除源目录本身
+	if currentPath == rootPath && matchMode != "smart" {
 		return deleted, nil
 	}
 
-	// 检查当前目录是否为空
+	// 检查当前目录是否为空（API 必须成功才继续判断）
 	resp, err := e.client.ListDir(currentPath, 1, 1)
 	if err != nil {
 		return deleted, fmt.Errorf("check empty %s: %w", currentPath, err)

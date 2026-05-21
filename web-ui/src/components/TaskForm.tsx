@@ -309,7 +309,7 @@ export default function TaskForm({
               />
               <div>
                 <span className="text-sm text-slate-300">删除空目录</span>
-                <p className="text-xs text-slate-500 mt-0.5">同步后递归删除源目录下的空子目录（源目录本身不会被删除）</p>
+                <p className="text-xs text-slate-500 mt-0.5">同步后递归删除源目录下的空子目录；追更模式下源目录本身为空时也会删除，精确模式下不删除源目录本身</p>
               </div>
             </label>
 
