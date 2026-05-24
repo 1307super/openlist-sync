@@ -1,8 +1,10 @@
 package sync
 
 import (
+	"fmt"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/user/openlist-sync/internal/database"
@@ -12,6 +14,7 @@ import (
 var (
 	strictSERe  = regexp.MustCompile(`^[Ss](\d+)[Ee](\d+)\.[^.]+$`)
 	extractSERe = regexp.MustCompile(`[Ss](\d+)[Ee](\d+)`)
+	pureNumRe   = regexp.MustCompile(`^(\d+)\s+.*\.[^.]+$`)
 )
 
 type CompareResult struct {
@@ -48,12 +51,27 @@ func CompareFilesRecursive(src, dest []openlist.FileEntry, matchMode, srcRoot st
 }
 
 func smartMatch(srcFileName string, dest []openlist.FileEntry) bool {
-	srcM := strictSERe.FindStringSubmatch(strings.ToLower(srcFileName))
-	if srcM == nil {
-		return false
-	}
-	srcCode := "s" + srcM[1] + "e" + srcM[2]
+	lower := strings.ToLower(srcFileName)
 
+	// S01E195.ext 格式
+	srcM := strictSERe.FindStringSubmatch(lower)
+	if srcM != nil {
+		srcCode := "s" + srcM[1] + "e" + srcM[2]
+		return matchDestCode(srcCode, dest)
+	}
+
+	// "195 4K.mp4" 格式 → s01e195
+	numM := pureNumRe.FindStringSubmatch(lower)
+	if numM != nil {
+		epNum, _ := strconv.Atoi(numM[1])
+		srcCode := fmt.Sprintf("s01e%02d", epNum)
+		return matchDestCode(srcCode, dest)
+	}
+
+	return false
+}
+
+func matchDestCode(srcCode string, dest []openlist.FileEntry) bool {
 	for _, d := range dest {
 		destName := strings.ToLower(path.Base(d.RelPath))
 		destM := extractSERe.FindStringSubmatch(destName)
