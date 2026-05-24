@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"path"
 	stdsync "sync"
 	"time"
 
@@ -123,7 +124,21 @@ func (r *PendingReconciler) ReconcileOnce() error {
 		database.InsertLog(r.db, job.TaskID, "info",
 			fmt.Sprintf("后台确认复制完成: %s", job.FileName), nil)
 
-		if task.CompletionRule == "delete_source" {
+		// Rename in dest if needed (e.g., "195 4K.mp4" → "S01E195.mp4")
+		renameOK := true
+		if newName := RenameTarget(job.FileName); newName != "" {
+			filePath := path.Join(job.DstDir, job.FileName)
+			if err := r.client.Rename(filePath, newName); err != nil {
+				renameOK = false
+				database.InsertLog(r.db, job.TaskID, "error",
+					fmt.Sprintf("重命名失败: %s → %s: %v", job.FileName, newName, err), nil)
+			} else {
+				database.InsertLog(r.db, job.TaskID, "info",
+					fmt.Sprintf("已重命名: %s → %s", job.FileName, newName), nil)
+			}
+		}
+
+		if task.CompletionRule == "delete_source" && renameOK {
 			if err := r.client.Remove(job.SrcDir, []string{job.FileName}); err != nil {
 				database.InsertLog(r.db, job.TaskID, "error",
 					fmt.Sprintf("删除源文件失败: %s → %v", job.FileName, err), nil)

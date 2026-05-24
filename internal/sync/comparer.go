@@ -85,6 +85,19 @@ func matchDestCode(srcCode string, dest []openlist.FileEntry) bool {
 	return false
 }
 
+// RenameTarget returns the desired renamed filename for pure-number sources like "195 4K.mp4".
+// Returns empty string if no rename is needed.
+func RenameTarget(fileName string) string {
+	lower := strings.ToLower(fileName)
+	numM := pureNumRe.FindStringSubmatch(lower)
+	if numM == nil {
+		return ""
+	}
+	epNum, _ := strconv.Atoi(numM[1])
+	ext := path.Ext(fileName)
+	return fmt.Sprintf("S01E%02d%s", epNum, ext)
+}
+
 func exactMatch(srcFileName string, dest []openlist.FileEntry) bool {
 	srcLower := strings.ToLower(srcFileName)
 	for _, d := range dest {

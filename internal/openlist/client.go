@@ -224,6 +224,29 @@ func (c *Client) SubmitCopy(srcDir, dstDir string, names []string, overwrite, sk
 	return nil
 }
 
+func (c *Client) Rename(filePath, newName string) error {
+	payload := map[string]string{
+		"path": filePath,
+		"name": newName,
+	}
+	data, code, err := c.doRequestWithRetries("POST", "/api/fs/rename", payload, 2)
+	if err != nil {
+		return fmt.Errorf("rename request: %w", err)
+	}
+
+	var result struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return fmt.Errorf("parse rename response: %w", err)
+	}
+	if code != 200 || result.Code != 200 {
+		return fmt.Errorf("rename failed: %s (http %d, code %d)", result.Message, code, result.Code)
+	}
+	return nil
+}
+
 func (c *Client) Remove(dir string, names []string) error {
 	payload := map[string]interface{}{
 		"dir":   dir,
