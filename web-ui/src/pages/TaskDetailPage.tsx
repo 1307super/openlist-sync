@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { tasksApi } from "../api/client";
+import { tasksApi, syncApi } from "../api/client";
 import type { SyncTask, CopyJob } from "../types";
 import LogViewer from "../components/LogViewer";
 import TaskForm from "../components/TaskForm";
@@ -514,7 +514,20 @@ export default function TaskDetailPage() {
       </div>
 
       <div className="space-y-3">
-        <h2 className="text-lg font-semibold text-white">日志</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-white">日志</h2>
+          <button
+            onClick={async () => {
+              if (!confirm("确定清空所有任务的日志？此操作不可撤销。")) return;
+              try { await syncApi.clearLogs(); } catch {}
+              window.location.reload();
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-red-400 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-colors"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            清空全部日志
+          </button>
+        </div>
         <LogViewer taskId={taskId} isRunning={isRunning} />
       </div>
     </div>

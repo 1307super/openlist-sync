@@ -37,6 +37,7 @@ func RegisterRoutes(r *gin.Engine, h *Handlers, authSecret string, staticFS fs.F
 		protected.POST("/browse/dirs", h.BrowseDirs)
 
 		protected.GET("/sync/status", h.SyncStatus)
+		protected.DELETE("/logs", h.ClearLogs)
 
 		protected.GET("/openlist/copy-tasks", h.OpenListCopyTasks)
 	}

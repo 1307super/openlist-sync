@@ -106,6 +106,8 @@ export const syncApi = {
     }>("GET", "/sync/status"),
   progress: (taskId: number) =>
     request<SyncProgress>("GET", `/tasks/${taskId}/progress`),
+  clearLogs: () =>
+    request<{ success: boolean }>("DELETE", "/logs"),
 };
 
 export const openlistApi = {

@@ -348,6 +348,11 @@ func UpdateTaskLastSync(db *sql.DB, id int64) error {
 	return err
 }
 
+func ClearAllLogs(db *sql.DB) error {
+	_, err := db.Exec("DELETE FROM sync_logs")
+	return err
+}
+
 func InsertLog(db *sql.DB, taskID int64, level, message string, details *string) error {
 	_, err := db.Exec("INSERT INTO sync_logs (task_id, level, message, details) VALUES (?, ?, ?, ?)",
 		taskID, level, message, details)

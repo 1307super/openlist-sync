@@ -87,7 +87,7 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 
 	switch cmd {
 	case "/start":
-		b.send(chatID, "OpenList 同步机器人\n\n命令列表：\n/tasks - 任务列表\n/task <id> - 任务详情\n/create [名称 源路径 目标路径 [smart]] - 创建任务\n/delete <id> - 删除任务\n/start_task <id> - 启动任务\n/stop_task <id> - 停止任务\n/trigger <id> - 立即同步\n/logs <id> - 最近日志\n/settings - 查看设置")
+		b.send(chatID, "OpenList 同步机器人\n\n命令列表：\n/tasks - 任务列表\n/task <id> - 任务详情\n/create [名称 源路径 目标路径 [smart]] - 创建任务\n/delete <id> - 删除任务\n/start_task <id> - 启动任务\n/stop_task <id> - 停止任务\n/trigger <id> - 立即同步\n/logs <id> - 最近日志\n/clearlogs - 清空所有日志\n/settings - 查看设置")
 
 	case "/tasks":
 		b.handleTasks(chatID)
@@ -136,6 +136,9 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 			return
 		}
 		b.handleLogs(chatID, parts[1])
+
+	case "/clearlogs":
+		b.handleClearLogs(chatID)
 
 	case "/settings":
 		b.handleSettings(chatID)
@@ -459,6 +462,14 @@ func (b *Bot) handleLogs(chatID int64, idStr string) {
 		sb.WriteString(fmt.Sprintf("%s [%s] %s\n", emoji, lj.CreatedAt, lj.Message))
 	}
 	b.send(chatID, sb.String())
+}
+
+func (b *Bot) handleClearLogs(chatID int64) {
+	if err := database.ClearAllLogs(b.db); err != nil {
+		b.send(chatID, fmt.Sprintf("清空日志失败: %v", err))
+		return
+	}
+	b.send(chatID, "已清空所有任务日志")
 }
 
 func (b *Bot) handleSettings(chatID int64) {

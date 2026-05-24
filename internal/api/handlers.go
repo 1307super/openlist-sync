@@ -303,6 +303,14 @@ func (h *Handlers) DeleteTaskJob(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
+func (h *Handlers) ClearLogs(c *gin.Context) {
+	if err := database.ClearAllLogs(h.db); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
 func (h *Handlers) BrowseList(c *gin.Context) {
 	var body struct {
 		Path    string `json:"path"`
