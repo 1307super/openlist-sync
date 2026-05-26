@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"path"
+	"strings"
 	stdsync "sync"
 	"time"
 
@@ -112,8 +113,28 @@ func (r *PendingReconciler) ReconcileOnce() error {
 			destCache[job.DstDir] = destFiles
 		}
 
-		if !fileMatches(job.FileName, destFiles, task.MatchMode) {
+		if !pendingCopyReady(job.FileName, destFiles) {
 			continue
+		}
+
+		// Rename in dest if needed (e.g., "195 4K.mp4" or "195 4K.mp4.cas" → "S01E195.mp4")
+		if newName := RenameTarget(job.FileName); newName != "" {
+			currentName, alreadyRenamed := pendingCopyCurrentName(job.FileName, destFiles)
+			if alreadyRenamed {
+				database.InsertLog(r.db, job.TaskID, "info",
+					fmt.Sprintf("目标文件已是重命名后格式: %s", currentName), nil)
+			} else {
+				filePath := path.Join(job.DstDir, currentName)
+				if err := r.client.Rename(filePath, newName); err != nil {
+					database.InsertLog(r.db, job.TaskID, "error",
+						fmt.Sprintf("重命名失败: %s → %s: %v", currentName, newName, err), nil)
+					continue
+				}
+				destFiles = replaceCachedName(destFiles, currentName, newName)
+				destCache[job.DstDir] = destFiles
+				database.InsertLog(r.db, job.TaskID, "info",
+					fmt.Sprintf("已重命名: %s → %s", currentName, newName), nil)
+			}
 		}
 
 		if err := database.UpdateCopyJobStatus(r.db, job.ID, "completed", nil, nil); err != nil {
@@ -124,21 +145,7 @@ func (r *PendingReconciler) ReconcileOnce() error {
 		database.InsertLog(r.db, job.TaskID, "info",
 			fmt.Sprintf("后台确认复制完成: %s", job.FileName), nil)
 
-		// Rename in dest if needed (e.g., "195 4K.mp4" → "S01E195.mp4")
-		renameOK := true
-		if newName := RenameTarget(job.FileName); newName != "" {
-			filePath := path.Join(job.DstDir, job.FileName)
-			if err := r.client.Rename(filePath, newName); err != nil {
-				renameOK = false
-				database.InsertLog(r.db, job.TaskID, "error",
-					fmt.Sprintf("重命名失败: %s → %s: %v", job.FileName, newName, err), nil)
-			} else {
-				database.InsertLog(r.db, job.TaskID, "info",
-					fmt.Sprintf("已重命名: %s → %s", job.FileName, newName), nil)
-			}
-		}
-
-		if task.CompletionRule == "delete_source" && renameOK {
+		if task.CompletionRule == "delete_source" {
 			if err := r.client.Remove(job.SrcDir, []string{job.FileName}); err != nil {
 				database.InsertLog(r.db, job.TaskID, "error",
 					fmt.Sprintf("删除源文件失败: %s → %v", job.FileName, err), nil)
@@ -172,4 +179,53 @@ func fileMatches(fileName string, dest []openlist.FileEntry, matchMode string) b
 		return true
 	}
 	return exactMatch(fileName, dest)
+}
+
+func pendingCopyReady(fileName string, dest []openlist.FileEntry) bool {
+	currentName, _ := pendingCopyCurrentName(fileName, dest)
+	return currentName != ""
+}
+
+func pendingCopyCurrentName(fileName string, dest []openlist.FileEntry) (currentName string, alreadyRenamed bool) {
+	if name, ok := findNameVariant(fileName, dest); ok {
+		return name, false
+	}
+
+	// If a previous reconcile cycle renamed the file but failed before updating DB,
+	// allow the job to be marked completed on the next pass.
+	if newName := RenameTarget(fileName); newName != "" {
+		if name, ok := findNameVariant(newName, dest); ok {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+func exactNameExists(fileName string, dest []openlist.FileEntry) bool {
+	_, ok := findNameVariant(fileName, dest)
+	return ok
+}
+
+func findNameVariant(fileName string, dest []openlist.FileEntry) (string, bool) {
+	want := strings.ToLower(fileName)
+	wantCAS := want + ".cas"
+	for _, d := range dest {
+		name := path.Base(d.RelPath)
+		lower := strings.ToLower(name)
+		if lower == want || lower == wantCAS {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+func replaceCachedName(dest []openlist.FileEntry, oldName, newName string) []openlist.FileEntry {
+	oldLower := strings.ToLower(oldName)
+	for i := range dest {
+		if strings.ToLower(path.Base(dest[i].RelPath)) == oldLower {
+			dest[i].RelPath = newName
+			return dest
+		}
+	}
+	return dest
 }
