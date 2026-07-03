@@ -8,6 +8,8 @@ import type {
   SyncProgress,
   CopyTaskProgress,
   PaginatedResponse,
+  MonitorConfig,
+  MonitorDir,
 } from "../types";
 
 const BASE = "/api";
@@ -117,4 +119,25 @@ export const openlistApi = {
       count: number;
       error?: string;
     }>("GET", "/openlist/copy-tasks"),
+};
+
+export const monitorApi = {
+  getConfig: () => request<MonitorConfig>("GET", "/monitor/config"),
+  updateConfig: (data: Partial<MonitorConfig>) =>
+    request<MonitorConfig>("PUT", "/monitor/config", data),
+  listDirs: () =>
+    request<{ main: MonitorDir[]; chasing: MonitorDir[] }>(
+      "GET",
+      "/monitor/dirs"
+    ),
+  addDir: (path: string, kind: MonitorDir["kind"]) =>
+    request<MonitorDir>("POST", "/monitor/dirs", { path, kind }),
+  deleteDir: (id: number) =>
+    request<{ success: boolean }>("DELETE", `/monitor/dirs/${id}`),
+  trigger: () =>
+    request<{ message: string; running: boolean }>(
+      "POST",
+      "/monitor/trigger"
+    ),
+  status: () => request<{ running: boolean }>("GET", "/monitor/status"),
 };

@@ -1,8 +1,9 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { FolderSync, ListTodo, Settings, LogOut } from "lucide-react";
+import { FolderSync, ListTodo, Settings, LogOut, Wand2 } from "lucide-react";
 
 const navItems = [
   { to: "/", icon: ListTodo, label: "任务管理" },
+  { to: "/monitor", icon: Wand2, label: "监控处理" },
   { to: "/settings", icon: Settings, label: "设置" },
 ];
 

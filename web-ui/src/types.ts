@@ -97,3 +97,16 @@ export interface SyncProgress {
   taskCount: number;
   error?: string;
 }
+
+export interface MonitorConfig {
+  enabled: boolean;
+  scanIntervalSec: number;
+  lastRunAt: string | null;
+  lastStatus: string | null;
+}
+
+export interface MonitorDir {
+  id: number;
+  path: string;
+  kind: "main" | "chasing";
+}

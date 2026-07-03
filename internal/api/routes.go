@@ -40,6 +40,14 @@ func RegisterRoutes(r *gin.Engine, h *Handlers, authSecret string, staticFS fs.F
 		protected.DELETE("/logs", h.ClearLogs)
 
 		protected.GET("/openlist/copy-tasks", h.OpenListCopyTasks)
+
+		protected.GET("/monitor/config", h.GetMonitorConfig)
+		protected.PUT("/monitor/config", h.UpdateMonitorConfig)
+		protected.GET("/monitor/dirs", h.ListMonitorDirs)
+		protected.POST("/monitor/dirs", h.AddMonitorDir)
+		protected.DELETE("/monitor/dirs/:id", h.DeleteMonitorDir)
+		protected.POST("/monitor/trigger", h.TriggerMonitor)
+		protected.GET("/monitor/status", h.MonitorStatus)
 	}
 
 	if staticFS != nil {

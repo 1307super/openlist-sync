@@ -20,6 +20,7 @@ import (
 	"github.com/user/openlist-sync/internal/api"
 	"github.com/user/openlist-sync/internal/auth"
 	"github.com/user/openlist-sync/internal/database"
+	"github.com/user/openlist-sync/internal/monitor"
 	"github.com/user/openlist-sync/internal/openlist"
 	"github.com/user/openlist-sync/internal/scheduler"
 	"github.com/user/openlist-sync/internal/static"
@@ -46,7 +47,8 @@ func main() {
 	engine := syncengine.NewEngine(db, client)
 	reconciler := syncengine.NewPendingReconciler(db, client, 30*time.Second)
 	sched := scheduler.NewScheduler(db, engine)
-	handlers := api.NewHandlers(db, client, engine, sched)
+	monitorSvc := monitor.NewService(db, client)
+	handlers := api.NewHandlers(db, client, engine, sched, monitorSvc)
 
 	api.InitDefaultCredentials(db)
 
@@ -82,6 +84,10 @@ func main() {
 	sched.Start()
 	log.Printf("[main] scheduler started")
 	reconciler.Start()
+	if monCfg, err := database.GetMonitorConfig(db); err == nil && monCfg.Enabled {
+		monitorSvc.Start()
+		log.Printf("[main] monitor service started (enabled)")
+	}
 
 	var tgBot *telegram.Bot
 	var tgMu sync.Mutex
@@ -128,6 +134,7 @@ func main() {
 
 	sched.StopAll()
 	reconciler.Stop()
+	monitorSvc.Stop()
 	if tgBot != nil {
 		tgBot.Stop()
 	}

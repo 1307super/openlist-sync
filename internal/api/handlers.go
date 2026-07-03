@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/user/openlist-sync/internal/auth"
 	"github.com/user/openlist-sync/internal/database"
+	"github.com/user/openlist-sync/internal/monitor"
 	"github.com/user/openlist-sync/internal/openlist"
 	"github.com/user/openlist-sync/internal/scheduler"
 	"github.com/user/openlist-sync/internal/sync"
@@ -20,11 +21,12 @@ type Handlers struct {
 	client  *openlist.Client
 	engine  *sync.Engine
 	sched   *scheduler.Scheduler
+	monitor *monitor.Service
 	onTGBot func(token string, chatID int64)
 }
 
-func NewHandlers(db *sql.DB, client *openlist.Client, engine *sync.Engine, sched *scheduler.Scheduler) *Handlers {
-	return &Handlers{db: db, client: client, engine: engine, sched: sched}
+func NewHandlers(db *sql.DB, client *openlist.Client, engine *sync.Engine, sched *scheduler.Scheduler, mon *monitor.Service) *Handlers {
+	return &Handlers{db: db, client: client, engine: engine, sched: sched, monitor: mon}
 }
 
 func (h *Handlers) SetTGBotCallback(fn func(token string, chatID int64)) {
@@ -452,6 +454,119 @@ func (h *Handlers) SyncProgress(c *gin.Context) {
 		"copyTasks": active,
 		"taskCount": len(active),
 	})
+}
+
+func (h *Handlers) GetMonitorConfig(c *gin.Context) {
+	cfg, err := database.GetMonitorConfig(h.db)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, cfg.ToJSON())
+}
+
+func (h *Handlers) UpdateMonitorConfig(c *gin.Context) {
+	var body struct {
+		Enabled         *bool  `json:"enabled"`
+		ScanIntervalSec *int64 `json:"scanIntervalSec"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+
+	prev, _ := database.GetMonitorConfig(h.db)
+
+	upd := database.MonitorConfigUpdate{Enabled: body.Enabled, ScanIntervalSec: body.ScanIntervalSec}
+	if err := database.UpsertMonitorConfig(h.db, upd); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	cfg, _ := database.GetMonitorConfig(h.db)
+
+	// 根据启用状态与间隔变化，调整调度
+	intervalChanged := body.ScanIntervalSec != nil && (prev == nil || cfg.ScanIntervalSec != prev.ScanIntervalSec)
+	if cfg.Enabled {
+		if prev == nil || !prev.Enabled || intervalChanged {
+			h.monitor.Restart()
+		}
+	} else {
+		if prev != nil && prev.Enabled {
+			h.monitor.Stop()
+		}
+	}
+
+	c.JSON(http.StatusOK, cfg.ToJSON())
+}
+
+func (h *Handlers) ListMonitorDirs(c *gin.Context) {
+	dirs, err := database.ListMonitorDirs(h.db)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	main := make([]database.MonitorDirJSON, 0)
+	chasing := make([]database.MonitorDirJSON, 0)
+	for _, d := range dirs {
+		if d.Kind == "main" {
+			main = append(main, d.ToJSON())
+		} else if d.Kind == "chasing" {
+			chasing = append(chasing, d.ToJSON())
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"main": main, "chasing": chasing})
+}
+
+func (h *Handlers) AddMonitorDir(c *gin.Context) {
+	var body struct {
+		Path string `json:"path"`
+		Kind string `json:"kind"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	if body.Path == "" || (body.Kind != "main" && body.Kind != "chasing") {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "path 和 kind(main/chasing) 必填"})
+		return
+	}
+
+	dir, err := database.AddMonitorDir(h.db, body.Path, body.Kind)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dir.ToJSON())
+}
+
+func (h *Handlers) DeleteMonitorDir(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid id"})
+		return
+	}
+	if err := database.DeleteMonitorDir(h.db, id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func (h *Handlers) TriggerMonitor(c *gin.Context) {
+	if h.monitor.IsRunning() {
+		c.JSON(http.StatusConflict, gin.H{"message": "监控处理正在运行中"})
+		return
+	}
+	if !h.monitor.TriggerOnce() {
+		c.JSON(http.StatusConflict, gin.H{"message": "监控处理正在运行中"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "监控处理已触发", "running": true})
+}
+
+func (h *Handlers) MonitorStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"running": h.monitor.IsRunning()})
 }
 
 func formatUnixPtr(ts *int64) *string {

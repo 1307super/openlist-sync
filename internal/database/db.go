@@ -54,6 +54,23 @@ var migrations = []string{
 	`CREATE INDEX IF NOT EXISTS copy_jobs_task_status_idx ON copy_jobs(task_id, status)`,
 	`ALTER TABLE sync_tasks ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'exact'`,
 	`ALTER TABLE sync_tasks ADD COLUMN delete_empty_dirs INTEGER NOT NULL DEFAULT 0`,
+
+	// 监控处理服务：单一全局配置（id 恒为 1）
+	`CREATE TABLE IF NOT EXISTS monitor_config (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		enabled INTEGER NOT NULL DEFAULT 0,
+		scan_interval_sec INTEGER NOT NULL DEFAULT 1800,
+		last_run_at INTEGER,
+		last_status TEXT,
+		updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+	)`,
+	`CREATE TABLE IF NOT EXISTS monitor_dir (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		path TEXT NOT NULL UNIQUE,
+		kind TEXT NOT NULL,
+		created_at INTEGER NOT NULL DEFAULT (unixepoch())
+	)`,
+	`CREATE INDEX IF NOT EXISTS monitor_dir_kind_idx ON monitor_dir(kind)`,
 }
 
 func InitDB(dbPath string) (*sql.DB, error) {

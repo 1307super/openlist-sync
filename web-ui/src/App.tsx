@@ -7,6 +7,7 @@ import LoginPage from "./pages/LoginPage";
 import SettingsPage from "./pages/SettingsPage";
 import TasksPage from "./pages/TasksPage";
 import TaskDetailPage from "./pages/TaskDetailPage";
+import MonitorPage from "./pages/MonitorPage";
 
 export default function App() {
   const { token, isAuthenticated, login, logout } = useAuth();
@@ -24,6 +25,7 @@ export default function App() {
       <Routes>
         <Route element={<Layout onLogout={logout} />}>
           <Route path="/" element={<TasksPage />} />
+          <Route path="/monitor" element={<MonitorPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/tasks/:id" element={<TaskDetailPage />} />
         </Route>
