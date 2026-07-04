@@ -569,6 +569,23 @@ func (h *Handlers) MonitorStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"running": h.monitor.IsRunning()})
 }
 
+func (h *Handlers) GetMonitorLogs(c *gin.Context) {
+	page := openlist.ParseInt(c.DefaultQuery("page", "1"), 1)
+	perPage := openlist.ParseInt(c.DefaultQuery("per_page", "50"), 50)
+
+	logs, total, err := database.GetMonitorLogs(h.db, page, perPage)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	items := make([]database.SyncLogJSON, 0, len(logs))
+	for _, l := range logs {
+		items = append(items, l.ToJSON())
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": total})
+}
+
 func formatUnixPtr(ts *int64) *string {
 	if ts == nil {
 		return nil

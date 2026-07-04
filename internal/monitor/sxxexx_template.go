@@ -3,6 +3,7 @@ package monitor
 import (
 	"regexp"
 	"strings"
+	"time"
 )
 
 var (
@@ -16,10 +17,17 @@ var (
 // renamePureSxxExx 对应脚本 auto_rename_pure_sxxexx_files：在追更目录中，
 // 把纯剧集文件名（如 "S01E01.mkv"）用同目录模板文件（含 SxxExx 的非纯文件，
 // 如 "Show.S01E01.1080P.mkv"）构造出完整命名（→ "Show.S01E01.1080P.mkv"）。
-func (s *Service) renamePureSxxExx(chasingDir string) {
-	s.logf("info", "扫描追更目录重命名纯SxxExx文件: %s", chasingDir)
-
-	entries, err := s.walkDir(chasingDir, nil)
+// since 非零时按子目录 modified 增量剪枝；为零时全量扫描。
+func (s *Service) renamePureSxxExx(chasingDir string, since time.Time) {
+	var (
+		entries []remoteEntry
+		err     error
+	)
+	if since.IsZero() {
+		entries, err = s.walkDir(chasingDir, nil)
+	} else {
+		entries, err = s.walkChanged(chasingDir, since, nil)
+	}
 	if err != nil {
 		s.logf("error", "扫描追更目录失败 %s: %v", chasingDir, err)
 		return

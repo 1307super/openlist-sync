@@ -9,10 +9,12 @@ import {
   Power,
   Folder,
   RefreshCw,
+  ScrollText,
 } from "lucide-react";
 import { monitorApi } from "../api/client";
 import type { MonitorConfig, MonitorDir } from "../types";
 import DirectoryPicker from "../components/DirectoryPicker";
+import MonitorLogViewer from "../components/MonitorLogViewer";
 
 export default function MonitorPage() {
   const [config, setConfig] = useState<MonitorConfig | null>(null);
@@ -26,17 +28,20 @@ export default function MonitorPage() {
     kind: MonitorDir["kind"];
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const [cfg, dirs] = await Promise.all([
+      const [cfg, dirs, st] = await Promise.all([
         monitorApi.getConfig(),
         monitorApi.listDirs(),
+        monitorApi.status(),
       ]);
       setConfig(cfg);
       setIntervalDraft(cfg.scanIntervalSec);
       setMainDirs(dirs.main);
       setChasingDirs(dirs.chasing);
+      setRunning(st.running);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载失败");
@@ -48,6 +53,20 @@ export default function MonitorPage() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // 运行状态轮询（运行中时更频繁刷新状态徽标）
+  useEffect(() => {
+    const tick = async () => {
+      try {
+        const st = await monitorApi.status();
+        setRunning(st.running);
+      } catch {
+        /* ignore */
+      }
+    };
+    const interval = setInterval(tick, running ? 3000 : 15000);
+    return () => clearInterval(interval);
+  }, [running]);
 
   const toggleEnabled = useCallback(async () => {
     if (!config) return;
@@ -83,6 +102,7 @@ export default function MonitorPage() {
     try {
       setTriggering(true);
       await monitorApi.trigger();
+      setRunning(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "触发失败");
     } finally {
@@ -165,6 +185,12 @@ export default function MonitorPage() {
           <h2 className="text-sm font-semibold text-white tracking-wide uppercase">
             服务开关
           </h2>
+          {running && (
+            <span className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              执行中
+            </span>
+          )}
         </div>
 
         <div className="p-6 space-y-5">
@@ -274,6 +300,25 @@ export default function MonitorPage() {
           onClose={() => setPicker(null)}
         />
       )}
+
+      {/* 执行日志 */}
+      <section className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+        <div className="flex items-center gap-2.5 px-6 py-4 border-b border-slate-700/50 bg-slate-800/80">
+          <ScrollText className="w-4 h-4 text-primary" />
+          <h2 className="text-sm font-semibold text-white tracking-wide uppercase">
+            执行日志
+          </h2>
+          {running && (
+            <span className="ml-auto inline-flex items-center gap-1.5 text-[11px] text-emerald-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              实时刷新中
+            </span>
+          )}
+        </div>
+        <div className="p-4">
+          <MonitorLogViewer isRunning={running} />
+        </div>
+      </section>
     </div>
   );
 }

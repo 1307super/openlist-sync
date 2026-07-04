@@ -153,3 +153,32 @@ func DeleteMonitorDir(db *sql.DB, id int64) error {
 	_, err := db.Exec("DELETE FROM monitor_dir WHERE id=?", id)
 	return err
 }
+
+// GetMonitorLogs 查询监控服务的日志（sync_logs 中 task_id=0 的记录）。
+// 约定 task_id=0 表示监控处理服务日志，不归属于任何同步任务。
+func GetMonitorLogs(db *sql.DB, page, perPage int) ([]SyncLog, int, error) {
+	var total int
+	err := db.QueryRow("SELECT COUNT(*) FROM sync_logs WHERE task_id = 0").Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	offset := (page - 1) * perPage
+	rows, err := db.Query(`SELECT id, task_id, level, message, details, created_at
+		FROM sync_logs WHERE task_id = 0 ORDER BY id DESC LIMIT ? OFFSET ?`,
+		perPage, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var logs []SyncLog
+	for rows.Next() {
+		var l SyncLog
+		if err := rows.Scan(&l.ID, &l.TaskID, &l.Level, &l.Message, &l.Details, &l.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		logs = append(logs, l)
+	}
+	return logs, total, rows.Err()
+}

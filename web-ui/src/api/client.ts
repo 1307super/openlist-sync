@@ -140,4 +140,9 @@ export const monitorApi = {
       "/monitor/trigger"
     ),
   status: () => request<{ running: boolean }>("GET", "/monitor/status"),
+  logs: (page: number = 1, perPage: number = 50) =>
+    request<PaginatedResponse<SyncLog>>(
+      "GET",
+      `/monitor/logs?page=${page}&per_page=${perPage}`
+    ),
 };

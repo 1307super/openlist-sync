@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // targetExtensions 与脚本中的 TARGET_EXTENSIONS 一致。
@@ -74,11 +75,18 @@ func findVideoExt(name string) string {
 
 // syncMainDirCAS 对应脚本 sync_cas_filenames（主目录）。
 // 按目录分组处理：在每个目录内，把 .cas 边车文件名对齐到同目录的视频文件名。
-func (s *Service) syncMainDirCAS(mainDir string) {
-	s.logf("info", "扫描主目录同步CAS文件: %s", mainDir)
-
-	// 主目录扫描需跳过作为子目录出现的追更目录（避免在主目录下处理追更内容）。
-	entries, err := s.walkDir(mainDir, s.chasingDirNamesAt(mainDir))
+// since 非零时按子目录 modified 增量剪枝；为零时全量扫描。
+func (s *Service) syncMainDirCAS(mainDir string, since time.Time) {
+	skip := s.chasingDirNamesAt(mainDir)
+	var (
+		entries []remoteEntry
+		err     error
+	)
+	if since.IsZero() {
+		entries, err = s.walkDir(mainDir, skip)
+	} else {
+		entries, err = s.walkChanged(mainDir, since, skip)
+	}
 	if err != nil {
 		s.logf("error", "扫描主目录失败 %s: %v", mainDir, err)
 		return
@@ -181,10 +189,17 @@ func (s *Service) syncMainDirCASInDir(dir string, files []remoteEntry) {
 // syncChasingDirCAS 对应脚本 process_chasing_dir_cas_files（追更目录）。
 // 在每个目录内：识别纯剧集 .cas（S01E01.mp4.cas 或 164 4K.mp4.cas）和模板 .cas，
 // 用模板的 prefix/suffix + 新剧集号构造完整名（保留原集数位数）。
-func (s *Service) syncChasingDirCAS(chasingDir string) {
-	s.logf("info", "扫描追更目录同步CAS文件: %s", chasingDir)
-
-	entries, err := s.walkDir(chasingDir, nil)
+// since 非零时按子目录 modified 增量剪枝；为零时全量扫描。
+func (s *Service) syncChasingDirCAS(chasingDir string, since time.Time) {
+	var (
+		entries []remoteEntry
+		err     error
+	)
+	if since.IsZero() {
+		entries, err = s.walkDir(chasingDir, nil)
+	} else {
+		entries, err = s.walkChanged(chasingDir, since, nil)
+	}
 	if err != nil {
 		s.logf("error", "扫描追更目录失败 %s: %v", chasingDir, err)
 		return

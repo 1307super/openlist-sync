@@ -11,9 +11,9 @@ import (
 	"github.com/user/openlist-sync/internal/openlist"
 )
 
-// sizeIntervalMinutes 与脚本 SIZE_MONITOR_INTERVAL_MINUTES 一致：目录大小
-// 重命名每 3 分钟执行一次（按运行轮数节流）。
-const sizeIntervalMinutes = 3
+// sizeInterval 与脚本 SIZE_MONITOR_INTERVAL_MINUTES 一致：目录大小重命名
+// 每 3 分钟执行一次（用真实时间戳判断，与扫描间隔解耦）。
+const sizeInterval = 3 * time.Minute
 
 // Service 是监控处理服务：周期性对主目录/追更目录执行 CAS 同步、
 // 目录大小重命名、纯 SxxExx 模板重命名、HiveWeb 标签添加。
@@ -23,6 +23,12 @@ type Service struct {
 
 	mainDirs    []string // 运行时从数据库加载
 	chasingDirs []string // 运行时从数据库加载
+
+	// 增量扫描基准：上次成功扫描的时间。零值=下次全量。
+	// 仅存内存，进程重启后自动全量一次（安全）。
+	lastScanAt time.Time
+	// 上次执行目录大小重命名的时间，独立于扫描间隔。
+	lastSizeAt time.Time
 
 	mu      stdsync.Mutex
 	running bool
@@ -54,6 +60,9 @@ func (s *Service) Start() {
 		interval = 10
 	}
 
+	// 重启服务时强制全量一次
+	s.lastScanAt = time.Time{}
+
 	go s.loop(interval, s.stopCh)
 	log.Printf("[monitor] service started, interval=%ds", interval)
 }
@@ -72,22 +81,14 @@ func (s *Service) Stop() {
 func (s *Service) Restart() {
 	s.Stop()
 	// 等待旧 goroutine 退出（stopCh 关闭后 loop 会返回）
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 	s.Start()
 }
 
 func (s *Service) loop(intervalSec int64, stopCh chan struct{}) {
-	// 脚本：大小监控每 SIZE_MONITOR_INTERVAL_MINUTES*60/RUN_INTERVAL 轮执行一次
-	sizeEveryN := int(sizeIntervalMinutes*60) / int(intervalSec)
-	if sizeEveryN < 1 {
-		sizeEveryN = 1
-	}
-	sizeCounter := 0
-
-	// 启动时立即执行一次
+	// 启动后立即执行一次（Start 已把 lastScanAt 清零 → 全量）
 	for {
-		s.runSafe(sizeCounter%sizeEveryN == 0)
-		sizeCounter++
+		s.runSafe(false) // 定时任务走增量
 		select {
 		case <-time.After(time.Duration(intervalSec) * time.Second):
 		case <-stopCh:
@@ -96,7 +97,9 @@ func (s *Service) loop(intervalSec int64, stopCh chan struct{}) {
 	}
 }
 
-func (s *Service) runSafe(runSize bool) {
+// runSafe 执行一次处理，带并发保护与 panic 恢复。
+// forceFull=true 时忽略增量基准，全量扫描（手动触发用）。
+func (s *Service) runSafe(forceFull bool) {
 	s.mu.Lock()
 	if s.running {
 		s.mu.Unlock()
@@ -116,6 +119,13 @@ func (s *Service) runSafe(runSize bool) {
 		s.mu.Unlock()
 	}()
 
+	s.runOnce(forceFull)
+}
+
+// runOnce 是统一的处理编排。forceFull=true 时全量扫描。
+// 增量模式（forceFull=false）：以 lastScanAt 为基准，只扫描有变动的目录子树；
+// 全量模式（forceFull=true）：扫描整棵目录树（手动触发、首次启动）。
+func (s *Service) runOnce(forceFull bool) {
 	if err := s.loadDirs(); err != nil {
 		log.Printf("[monitor] load dirs: %v", err)
 		s.logf("error", "加载监控目录失败: %v", err)
@@ -123,36 +133,66 @@ func (s *Service) runSafe(runSize bool) {
 		return
 	}
 
-	s.logf("info", "监控处理周期开始（主目录 %d，追更目录 %d）", len(s.mainDirs), len(s.chasingDirs))
+	// 计算本次扫描基准
+	var since time.Time
+	mode := "增量"
+	if forceFull || s.lastScanAt.IsZero() {
+		since = time.Time{}
+		if forceFull {
+			mode = "全量(手动)"
+		} else {
+			mode = "全量(首次)"
+		}
+	} else {
+		since = s.lastScanAt
+	}
+
+	start := time.Now()
+	s.logf("info", "监控处理周期开始 [%s]：主目录 %d，追更目录 %d", mode, len(s.mainDirs), len(s.chasingDirs))
 
 	// 1. 主目录 CAS 同步
 	for _, d := range s.mainDirs {
-		s.syncMainDirCAS(d)
+		s.syncMainDirCAS(d, since)
 	}
 	// 2. 追更目录 CAS 同步
 	for _, d := range s.chasingDirs {
-		s.syncChasingDirCAS(d)
+		s.syncChasingDirCAS(d, since)
 	}
-	// 3. 目录大小重命名（按节流执行）
-	if runSize {
+	// 3. 目录大小重命名（独立 3 分钟节流，用真实时间戳判断）
+	if s.lastSizeAt.IsZero() || time.Since(s.lastSizeAt) >= sizeInterval {
+		s.logf("info", "执行目录大小重命名（距上次 %s）", sinceOrDash(s.lastSizeAt))
 		for _, d := range s.mainDirs {
 			s.renameDirsWithSize(d)
 		}
+		s.lastSizeAt = time.Now()
+	} else {
+		s.logf("info", "跳过目录大小重命名（距上次 %s，不足 %s）",
+			time.Since(s.lastSizeAt).Round(time.Second), sizeInterval)
 	}
 	// 4. 追更目录纯 SxxExx 模板重命名
 	for _, d := range s.chasingDirs {
-		s.renamePureSxxExx(d)
+		s.renamePureSxxExx(d, since)
 	}
 	// 5. HiveWeb 标签（主目录 + 追更目录，与脚本 CHASING_DIRS_HIVEWEB_FULL 一致）
 	for _, d := range s.mainDirs {
-		s.addHiveWebTag(d)
+		s.addHiveWebTag(d, since)
 	}
 	for _, d := range s.chasingDirs {
-		s.addHiveWebTag(d)
+		s.addHiveWebTag(d, since)
 	}
 
-	s.logf("info", "监控处理周期完成")
+	// 更新增量基准：本次成功完成后记录时间
+	s.lastScanAt = time.Now()
+	dur := time.Since(start).Round(time.Millisecond)
+	s.logf("info", "监控处理周期完成，耗时 %s", dur)
 	_ = database.UpdateMonitorRunResult(s.db, "idle")
+}
+
+func sinceOrDash(t time.Time) string {
+	if t.IsZero() {
+		return "首次"
+	}
+	return time.Since(t).Round(time.Second).String()
 }
 
 // loadDirs 从数据库加载主目录/追更目录列表到运行时字段。
@@ -176,7 +216,7 @@ func (s *Service) loadDirs() error {
 	return nil
 }
 
-// TriggerOnce 异步触发一次完整的监控处理。返回是否成功提交（已在运行则返回 false）。
+// TriggerOnce 异步触发一次完整的监控处理（强制全量）。返回是否成功提交（已在运行则返回 false）。
 func (s *Service) TriggerOnce() bool {
 	s.mu.Lock()
 	if s.running {
@@ -203,32 +243,7 @@ func (s *Service) TriggerOnce() bool {
 		s.running = true
 		s.mu.Unlock()
 
-		if err := s.loadDirs(); err != nil {
-			s.logf("error", "加载监控目录失败: %v", err)
-			_ = database.UpdateMonitorRunResult(s.db, "error")
-			return
-		}
-		s.logf("info", "手动触发监控处理（主目录 %d，追更目录 %d）", len(s.mainDirs), len(s.chasingDirs))
-		for _, d := range s.mainDirs {
-			s.syncMainDirCAS(d)
-		}
-		for _, d := range s.chasingDirs {
-			s.syncChasingDirCAS(d)
-		}
-		for _, d := range s.mainDirs {
-			s.renameDirsWithSize(d)
-		}
-		for _, d := range s.chasingDirs {
-			s.renamePureSxxExx(d)
-		}
-		for _, d := range s.mainDirs {
-			s.addHiveWebTag(d)
-		}
-		for _, d := range s.chasingDirs {
-			s.addHiveWebTag(d)
-		}
-		s.logf("info", "手动触发监控处理完成")
-		_ = database.UpdateMonitorRunResult(s.db, "idle")
+		s.runOnce(true)
 	}()
 	return true
 }
