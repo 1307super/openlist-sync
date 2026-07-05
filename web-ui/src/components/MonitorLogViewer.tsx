@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { monitorApi } from "../api/client";
-import type { SyncLog } from "../types";
+import type { MonitorLog } from "../types";
 import {
   ChevronLeft,
   ChevronRight,
@@ -32,7 +32,7 @@ const levelDots: Record<string, string> = {
 type LevelFilter = "all" | "info" | "warn" | "error";
 
 export default function MonitorLogViewer({ isRunning }: MonitorLogViewerProps) {
-  const [logs, setLogs] = useState<SyncLog[]>([]);
+  const [logs, setLogs] = useState<MonitorLog[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);

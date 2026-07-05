@@ -154,31 +154,70 @@ func DeleteMonitorDir(db *sql.DB, id int64) error {
 	return err
 }
 
-// GetMonitorLogs 查询监控服务的日志（sync_logs 中 task_id=0 的记录）。
-// 约定 task_id=0 表示监控处理服务日志，不归属于任何同步任务。
-func GetMonitorLogs(db *sql.DB, page, perPage int) ([]SyncLog, int, error) {
+// GetMonitorLogs 查询监控服务的日志（monitor_logs 表，独立于 sync_logs）。
+func GetMonitorLogs(db *sql.DB, page, perPage int) ([]MonitorLog, int, error) {
 	var total int
-	err := db.QueryRow("SELECT COUNT(*) FROM sync_logs WHERE task_id = 0").Scan(&total)
+	err := db.QueryRow("SELECT COUNT(*) FROM monitor_logs").Scan(&total)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	offset := (page - 1) * perPage
-	rows, err := db.Query(`SELECT id, task_id, level, message, details, created_at
-		FROM sync_logs WHERE task_id = 0 ORDER BY id DESC LIMIT ? OFFSET ?`,
+	rows, err := db.Query(`SELECT id, level, message, details, created_at
+		FROM monitor_logs ORDER BY id DESC LIMIT ? OFFSET ?`,
 		perPage, offset)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
 
-	var logs []SyncLog
+	var logs []MonitorLog
 	for rows.Next() {
-		var l SyncLog
-		if err := rows.Scan(&l.ID, &l.TaskID, &l.Level, &l.Message, &l.Details, &l.CreatedAt); err != nil {
+		var l MonitorLog
+		if err := rows.Scan(&l.ID, &l.Level, &l.Message, &l.Details, &l.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		logs = append(logs, l)
 	}
 	return logs, total, rows.Err()
+}
+
+// MonitorLog 是监控处理服务的一条日志（独立表，不归属同步任务）。
+type MonitorLog struct {
+	ID        int64
+	Level     string
+	Message   string
+	Details   *string
+	CreatedAt int64
+}
+
+type MonitorLogJSON struct {
+	ID        int64   `json:"id"`
+	Level     string  `json:"level"`
+	Message   string  `json:"message"`
+	Details   *string `json:"details"`
+	CreatedAt string  `json:"createdAt"`
+}
+
+func (l *MonitorLog) ToJSON() MonitorLogJSON {
+	return MonitorLogJSON{
+		ID:        l.ID,
+		Level:     l.Level,
+		Message:   l.Message,
+		Details:   l.Details,
+		CreatedAt: formatUnix(l.CreatedAt),
+	}
+}
+
+// InsertMonitorLog 写入一条监控日志。
+func InsertMonitorLog(db *sql.DB, level, message string, details *string) error {
+	_, err := db.Exec("INSERT INTO monitor_logs (level, message, details) VALUES (?, ?, ?)",
+		level, message, details)
+	return err
+}
+
+// ClearMonitorLogs 清空监控日志。
+func ClearMonitorLogs(db *sql.DB) error {
+	_, err := db.Exec("DELETE FROM monitor_logs")
+	return err
 }

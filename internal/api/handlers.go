@@ -579,7 +579,7 @@ func (h *Handlers) GetMonitorLogs(c *gin.Context) {
 		return
 	}
 
-	items := make([]database.SyncLogJSON, 0, len(logs))
+	items := make([]database.MonitorLogJSON, 0, len(logs))
 	for _, l := range logs {
 		items = append(items, l.ToJSON())
 	}

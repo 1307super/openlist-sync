@@ -110,3 +110,11 @@ export interface MonitorDir {
   path: string;
   kind: "main" | "chasing";
 }
+
+export interface MonitorLog {
+  id: number;
+  level: "info" | "warn" | "error";
+  message: string;
+  details: string | null;
+  createdAt: string;
+}

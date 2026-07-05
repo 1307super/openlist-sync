@@ -71,6 +71,16 @@ var migrations = []string{
 		created_at INTEGER NOT NULL DEFAULT (unixepoch())
 	)`,
 	`CREATE INDEX IF NOT EXISTS monitor_dir_kind_idx ON monitor_dir(kind)`,
+	// 监控日志独立成表（不复用 sync_logs，避免外键约束冲突：
+	// sync_logs.task_id REFERENCES sync_tasks(id)，不存在 id=0 的任务）。
+	`CREATE TABLE IF NOT EXISTS monitor_logs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		level TEXT NOT NULL,
+		message TEXT NOT NULL,
+		details TEXT,
+		created_at INTEGER NOT NULL DEFAULT (unixepoch())
+	)`,
+	`CREATE INDEX IF NOT EXISTS monitor_logs_created_idx ON monitor_logs(id DESC)`,
 }
 
 func InitDB(dbPath string) (*sql.DB, error) {

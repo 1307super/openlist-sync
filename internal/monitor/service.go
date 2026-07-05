@@ -255,8 +255,10 @@ func (s *Service) IsRunning() bool {
 	return s.running
 }
 
-// logf 写入一条监控日志（task_id = 0 表示监控服务，不归属于任何同步任务）。
+// logf 写入一条监控日志（独立 monitor_logs 表，不归属任何同步任务）。
 func (s *Service) logf(level, format string, args ...interface{}) {
-	_ = database.InsertLog(s.db, 0, level, fmt.Sprintf(format, args...), nil)
+	if err := database.InsertMonitorLog(s.db, level, fmt.Sprintf(format, args...), nil); err != nil {
+		log.Printf("[monitor] 写入日志失败: %v", err)
+	}
 	log.Printf("[monitor] "+format, args...)
 }
