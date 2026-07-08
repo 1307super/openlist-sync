@@ -9,7 +9,7 @@ import (
 // 为视频文件（.mkv/.mp4/.ts）在扩展名前追加 "@HiveWeb" 标签。
 // 跳过：文件名已含 hiveweb、纯 SxxExx 格式、含排除关键字。
 // since 非零时按子目录 modified 增量剪枝；为零时全量扫描。
-func (s *Service) addHiveWebTag(scanDir string, since time.Time) {
+func (s *Service) addHiveWebTag(scanDir string, since time.Time) stepStats {
 	var (
 		entries []remoteEntry
 		err     error
@@ -21,9 +21,10 @@ func (s *Service) addHiveWebTag(scanDir string, since time.Time) {
 	}
 	if err != nil {
 		s.logf("error", "扫描目录失败 %s: %v", scanDir, err)
-		return
+		return stepStats{failed: 1}
 	}
 
+	var stats stepStats
 	for _, f := range entries {
 		if f.isDir {
 			continue
@@ -51,10 +52,13 @@ func (s *Service) addHiveWebTag(scanDir string, since time.Time) {
 		newName := base + "@HiveWeb" + ext
 
 		oldPath := joinPath(f.absDir, f.name)
+		stats.scanned++
 		if err := s.rename(oldPath, newName); err != nil {
+			stats.failed++
 			s.logf("error", "添加HiveWeb标签失败 %s: %v", f.name, err)
 		} else {
 			s.logf("info", "添加HiveWeb标签: %s", f.name)
 		}
 	}
+	return stats
 }

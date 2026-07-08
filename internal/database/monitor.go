@@ -9,6 +9,7 @@ import (
 type MonitorConfig struct {
 	Enabled         bool
 	ScanIntervalSec int64
+	LastScanAt      *int64 // 增量扫描基准（持久化），nil=下次全量
 	LastRunAt       *int64
 	LastStatus      *string
 	UpdatedAt       int64
@@ -17,6 +18,7 @@ type MonitorConfig struct {
 type MonitorConfigJSON struct {
 	Enabled         bool    `json:"enabled"`
 	ScanIntervalSec int64   `json:"scanIntervalSec"`
+	LastScanAt      *string `json:"lastScanAt"`
 	LastRunAt       *string `json:"lastRunAt"`
 	LastStatus      *string `json:"lastStatus"`
 }
@@ -25,6 +27,7 @@ func (c *MonitorConfig) ToJSON() MonitorConfigJSON {
 	return MonitorConfigJSON{
 		Enabled:         c.Enabled,
 		ScanIntervalSec: c.ScanIntervalSec,
+		LastScanAt:      formatUnixPtr(c.LastScanAt),
 		LastRunAt:       formatUnixPtr(c.LastRunAt),
 		LastStatus:      c.LastStatus,
 	}
@@ -56,9 +59,9 @@ func GetMonitorConfig(db *sql.DB) (*MonitorConfig, error) {
 
 	c := &MonitorConfig{}
 	var enabled int64
-	err := db.QueryRow(`SELECT enabled, scan_interval_sec, last_run_at, last_status, updated_at
+	err := db.QueryRow(`SELECT enabled, scan_interval_sec, last_scan_at, last_run_at, last_status, updated_at
 		FROM monitor_config WHERE id = 1`).
-		Scan(&enabled, &c.ScanIntervalSec, &c.LastRunAt, &c.LastStatus, &c.UpdatedAt)
+		Scan(&enabled, &c.ScanIntervalSec, &c.LastScanAt, &c.LastRunAt, &c.LastStatus, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +102,20 @@ func UpdateMonitorRunResult(db *sql.DB, status string) error {
 	now := time.Now().Unix()
 	_, err := db.Exec(`UPDATE monitor_config SET last_run_at=?, last_status=?, updated_at=? WHERE id=1`,
 		now, status, now)
+	return err
+}
+
+// UpdateMonitorLastScanAt 持久化增量扫描基准。成功处理一轮后调用。
+func UpdateMonitorLastScanAt(db *sql.DB, ts int64) error {
+	now := time.Now().Unix()
+	_, err := db.Exec(`UPDATE monitor_config SET last_scan_at=?, updated_at=? WHERE id=1`, ts, now)
+	return err
+}
+
+// SetMonitorLastScanAt 手动设置增量扫描基准。传 nil=清零（下次全量）。
+func SetMonitorLastScanAt(db *sql.DB, ts *int64) error {
+	now := time.Now().Unix()
+	_, err := db.Exec(`UPDATE monitor_config SET last_scan_at=?, updated_at=? WHERE id=1`, ts, now)
 	return err
 }
 

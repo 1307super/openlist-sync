@@ -30,13 +30,14 @@ func formatSize(sizeBytes int64) string {
 
 // renameDirsWithSize 对应脚本 process_directory：遍历主目录的子目录，
 // 计算每个子目录大小并在目录名末尾追加/更新大小标签（如 "Show" → "Show 12.5GB"）。
-func (s *Service) renameDirsWithSize(mainDir string) {
+func (s *Service) renameDirsWithSize(mainDir string) stepStats {
 	s.logf("info", "扫描主目录更新大小标签: %s", mainDir)
+	var stats stepStats
 
 	subs, err := s.listDirsOnly(mainDir)
 	if err != nil {
 		s.logf("error", "列出主目录子目录失败 %s: %v", mainDir, err)
-		return
+		return stepStats{failed: 1}
 	}
 
 	for _, sub := range subs {
@@ -47,6 +48,7 @@ func (s *Service) renameDirsWithSize(mainDir string) {
 
 		sizeBytes, err := s.calcDirSize(sub.absPath())
 		if err != nil {
+			stats.failed++
 			s.logf("error", "获取目录大小失败 %s: %v", sub.absPath(), err)
 			continue
 		}
@@ -64,10 +66,13 @@ func (s *Service) renameDirsWithSize(mainDir string) {
 			continue
 		}
 
+		stats.scanned++
 		if err := s.rename(sub.absPath(), newDirName); err != nil {
+			stats.failed++
 			s.logf("error", "重命名目录失败 %s: %v", itemName, err)
 		} else {
 			s.logf("info", "目录大小更新: %s -> %s", itemName, newDirName)
 		}
 	}
+	return stats
 }

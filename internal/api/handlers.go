@@ -569,6 +569,54 @@ func (h *Handlers) MonitorStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"running": h.monitor.IsRunning()})
 }
 
+// UpdateMonitorScanTime 手动修改增量扫描基准时间。
+// body: { "lastScanAt": "2026-07-07T01:00:00Z" | null }
+// null 或空字符串 = 清零（下次全量扫描）。
+func (h *Handlers) UpdateMonitorScanTime(c *gin.Context) {
+	var body struct {
+		LastScanAt *string `json:"lastScanAt"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+
+	var ts *int64
+	if body.LastScanAt != nil && *body.LastScanAt != "" {
+		t, err := time.Parse(time.RFC3339, *body.LastScanAt)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "时间格式无效，需 RFC3339（如 2026-07-07T01:00:00Z）"})
+			return
+		}
+		v := t.Unix()
+		ts = &v
+	}
+
+	if err := database.SetMonitorLastScanAt(h.db, ts); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	// 同步更新内存中的基准
+	if ts == nil {
+		h.monitor.SetLastScanAt(time.Time{})
+	} else {
+		h.monitor.SetLastScanAt(time.Unix(*ts, 0))
+	}
+
+	// 记录操作日志
+	if ts == nil {
+		database.InsertMonitorLog(h.db, "info", "手动重置增量扫描基准为空（下次全量）", nil)
+	} else {
+		t := time.Unix(*ts, 0)
+		database.InsertMonitorLog(h.db, "info",
+			fmt.Sprintf("手动修改增量扫描基准为 %s", t.Format("2006-01-02 15:04:05")), nil)
+	}
+
+	cfg, _ := database.GetMonitorConfig(h.db)
+	c.JSON(http.StatusOK, cfg.ToJSON())
+}
+
 func (h *Handlers) GetMonitorLogs(c *gin.Context) {
 	page := openlist.ParseInt(c.DefaultQuery("page", "1"), 1)
 	perPage := openlist.ParseInt(c.DefaultQuery("per_page", "50"), 50)

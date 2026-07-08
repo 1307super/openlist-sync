@@ -15,6 +15,17 @@ import (
 // 每 3 分钟执行一次（用真实时间戳判断，与扫描间隔解耦）。
 const sizeInterval = 3 * time.Minute
 
+// stepStats 是单个处理步骤的统计。failed > 0 表示该步有失败，
+// runOnce 据此决定是否推进增量扫描基准。
+type stepStats struct {
+	scanned int // 处理/扫描的条目数
+	failed  int // 失败数（扫描失败 + 重命名失败）
+}
+
+func (a stepStats) add(b stepStats) stepStats {
+	return stepStats{scanned: a.scanned + b.scanned, failed: a.failed + b.failed}
+}
+
 // Service 是监控处理服务：周期性对主目录/追更目录执行 CAS 同步、
 // 目录大小重命名、纯 SxxExx 模板重命名、HiveWeb 标签添加。
 type Service struct {
@@ -60,11 +71,15 @@ func (s *Service) Start() {
 		interval = 10
 	}
 
-	// 重启服务时强制全量一次
+	// 从数据库恢复增量扫描基准（持久化，重启不丢失）。
+	// 为 nil（未设置）时为零值 → 下次自动全量。
 	s.lastScanAt = time.Time{}
+	if cfg.LastScanAt != nil {
+		s.lastScanAt = time.Unix(*cfg.LastScanAt, 0)
+	}
 
 	go s.loop(interval, s.stopCh)
-	log.Printf("[monitor] service started, interval=%ds", interval)
+	log.Printf("[monitor] service started, interval=%ds, lastScanAt=%s", interval, formatScanAt(s.lastScanAt))
 }
 
 // Stop 停止周期调度。
@@ -125,6 +140,8 @@ func (s *Service) runSafe(forceFull bool) {
 // runOnce 是统一的处理编排。forceFull=true 时全量扫描。
 // 增量模式（forceFull=false）：以 lastScanAt 为基准，只扫描有变动的目录子树；
 // 全量模式（forceFull=true）：扫描整棵目录树（手动触发、首次启动）。
+// 关键：只有当本轮无失败时才推进增量基准 lastScanAt；有失败则保持基准不变，
+// 下轮自动重试漏处理的目录。
 func (s *Service) runOnce(forceFull bool) {
 	if err := s.loadDirs(); err != nil {
 		log.Printf("[monitor] load dirs: %v", err)
@@ -150,19 +167,20 @@ func (s *Service) runOnce(forceFull bool) {
 	start := time.Now()
 	s.logf("info", "监控处理周期开始 [%s]：主目录 %d，追更目录 %d", mode, len(s.mainDirs), len(s.chasingDirs))
 
+	var total stepStats
 	// 1. 主目录 CAS 同步
 	for _, d := range s.mainDirs {
-		s.syncMainDirCAS(d, since)
+		total = total.add(s.syncMainDirCAS(d, since))
 	}
 	// 2. 追更目录 CAS 同步
 	for _, d := range s.chasingDirs {
-		s.syncChasingDirCAS(d, since)
+		total = total.add(s.syncChasingDirCAS(d, since))
 	}
 	// 3. 目录大小重命名（独立 3 分钟节流，用真实时间戳判断）
 	if s.lastSizeAt.IsZero() || time.Since(s.lastSizeAt) >= sizeInterval {
 		s.logf("info", "执行目录大小重命名（距上次 %s）", sinceOrDash(s.lastSizeAt))
 		for _, d := range s.mainDirs {
-			s.renameDirsWithSize(d)
+			total = total.add(s.renameDirsWithSize(d))
 		}
 		s.lastSizeAt = time.Now()
 	} else {
@@ -171,20 +189,31 @@ func (s *Service) runOnce(forceFull bool) {
 	}
 	// 4. 追更目录纯 SxxExx 模板重命名
 	for _, d := range s.chasingDirs {
-		s.renamePureSxxExx(d, since)
+		total = total.add(s.renamePureSxxExx(d, since))
 	}
 	// 5. HiveWeb 标签（主目录 + 追更目录，与脚本 CHASING_DIRS_HIVEWEB_FULL 一致）
 	for _, d := range s.mainDirs {
-		s.addHiveWebTag(d, since)
+		total = total.add(s.addHiveWebTag(d, since))
 	}
 	for _, d := range s.chasingDirs {
-		s.addHiveWebTag(d, since)
+		total = total.add(s.addHiveWebTag(d, since))
 	}
 
-	// 更新增量基准：本次成功完成后记录时间
-	s.lastScanAt = time.Now()
 	dur := time.Since(start).Round(time.Millisecond)
-	s.logf("info", "监控处理周期完成，耗时 %s", dur)
+
+	// 关键：失败不推进基准，下轮自动重试
+	if total.failed > 0 {
+		s.logf("warn", "监控处理周期完成（耗时 %s）：处理 %d 项，失败 %d 项；增量基准保持 %s，下轮将重试",
+			dur, total.scanned, total.failed, formatScanAt(s.lastScanAt))
+		_ = database.UpdateMonitorRunResult(s.db, "error")
+		return
+	}
+
+	// 全部成功：推进增量基准并持久化
+	s.lastScanAt = time.Now()
+	_ = database.UpdateMonitorLastScanAt(s.db, s.lastScanAt.Unix())
+	s.logf("info", "监控处理周期完成（耗时 %s）：处理 %d 项，全部成功；增量基准更新为 %s",
+		dur, total.scanned, formatScanAt(s.lastScanAt))
 	_ = database.UpdateMonitorRunResult(s.db, "idle")
 }
 
@@ -193,6 +222,29 @@ func sinceOrDash(t time.Time) string {
 		return "首次"
 	}
 	return time.Since(t).Round(time.Second).String()
+}
+
+// formatScanAt 格式化扫描基准时间用于日志显示。
+func formatScanAt(t time.Time) string {
+	if t.IsZero() {
+		return "未设置(全量)"
+	}
+	return t.Format("2006-01-02 15:04:05")
+}
+
+// SetLastScanAt 手动设置增量扫描基准（供 API 调用）。
+// 传零值=清零（下次全量）；传非零值=以该时间为基准增量扫描。
+func (s *Service) SetLastScanAt(t time.Time) {
+	s.mu.Lock()
+	s.lastScanAt = t
+	s.mu.Unlock()
+}
+
+// LastScanAt 返回当前增量扫描基准。
+func (s *Service) LastScanAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastScanAt
 }
 
 // loadDirs 从数据库加载主目录/追更目录列表到运行时字段。

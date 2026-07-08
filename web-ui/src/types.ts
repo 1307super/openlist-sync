@@ -101,6 +101,7 @@ export interface SyncProgress {
 export interface MonitorConfig {
   enabled: boolean;
   scanIntervalSec: number;
+  lastScanAt: string | null;
   lastRunAt: string | null;
   lastStatus: string | null;
 }

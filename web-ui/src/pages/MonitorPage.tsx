@@ -10,6 +10,9 @@ import {
   Folder,
   RefreshCw,
   ScrollText,
+  CalendarClock,
+  Pencil,
+  RotateCcw,
 } from "lucide-react";
 import { monitorApi } from "../api/client";
 import type { MonitorConfig, MonitorDir } from "../types";
@@ -29,6 +32,9 @@ export default function MonitorPage() {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [editingScanTime, setEditingScanTime] = useState(false);
+  const [scanTimeDraft, setScanTimeDraft] = useState("");
+  const [savingScanTime, setSavingScanTime] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -107,6 +113,54 @@ export default function MonitorPage() {
       setError(err instanceof Error ? err.message : "触发失败");
     } finally {
       setTriggering(false);
+    }
+  }, []);
+
+  // 打开编辑扫描基准时间弹窗，预填当前值（转为 datetime-local 格式）
+  const openEditScanTime = useCallback(() => {
+    if (config?.lastScanAt) {
+      // RFC3339 -> datetime-local (yyyy-MM-ddTHH:mm)
+      const d = new Date(config.lastScanAt);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const local = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(
+        d.getDate()
+      )}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      setScanTimeDraft(local);
+    } else {
+      setScanTimeDraft("");
+    }
+    setEditingScanTime(true);
+  }, [config?.lastScanAt]);
+
+  const saveScanTime = useCallback(async () => {
+    try {
+      setSavingScanTime(true);
+      let ts: string | null = null;
+      if (scanTimeDraft) {
+        // datetime-local 视作本地时间，转 RFC3339
+        const d = new Date(scanTimeDraft);
+        ts = d.toISOString();
+      }
+      const updated = await monitorApi.updateScanTime(ts);
+      setConfig(updated);
+      setEditingScanTime(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setSavingScanTime(false);
+    }
+  }, [scanTimeDraft]);
+
+  const resetScanTime = useCallback(async () => {
+    try {
+      setSavingScanTime(true);
+      const updated = await monitorApi.updateScanTime(null);
+      setConfig(updated);
+      setEditingScanTime(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重置失败");
+    } finally {
+      setSavingScanTime(false);
     }
   }, []);
 
@@ -247,6 +301,30 @@ export default function MonitorPage() {
           </div>
 
           <div className="flex items-center justify-between gap-4 pt-1 border-t border-slate-700/50">
+            <div className="min-w-0">
+              <div className="text-sm text-slate-300 flex items-center gap-1.5">
+                <CalendarClock className="w-3.5 h-3.5 text-slate-400" />
+                增量扫描基准
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {config?.lastScanAt
+                  ? new Date(config.lastScanAt).toLocaleString()
+                  : "未设置（下次全量）"}
+                <span className="ml-1 text-slate-600">
+                  · 仅扫描此时间之后变动的目录
+                </span>
+              </p>
+            </div>
+            <button
+              onClick={openEditScanTime}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors shrink-0"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+              修改
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between gap-4 pt-1 border-t border-slate-700/50">
             <div>
               <div className="text-sm text-slate-300">最近运行</div>
               <p className="text-xs text-slate-500 mt-0.5">
@@ -299,6 +377,71 @@ export default function MonitorPage() {
           }}
           onClose={() => setPicker(null)}
         />
+      )}
+
+      {editingScanTime && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setEditingScanTime(false);
+          }}
+        >
+          <div className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-xl shadow-2xl">
+            <div className="px-6 py-4 border-b border-slate-800">
+              <h3 className="text-base font-semibold text-white">
+                修改增量扫描基准
+              </h3>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-xs text-slate-500 leading-relaxed">
+                增量扫描只会处理<b className="text-slate-300">此时间之后</b>变动的目录。
+                如果因网络异常等原因导致某次检查失败、漏处理了文件，可把基准改回更早的时间，
+                下次执行时会重新扫描该时间点之后的所有变动。
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">
+                  扫描基准时间（本地时间）
+                </label>
+                <input
+                  type="datetime-local"
+                  value={scanTimeDraft}
+                  onChange={(e) => setScanTimeDraft(e.target.value)}
+                  className="input"
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  清空并保存 = 下次全量扫描。
+                </p>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-slate-800 flex items-center justify-between gap-3">
+              <button
+                onClick={resetScanTime}
+                disabled={savingScanTime}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-amber-400 hover:text-amber-300 transition-colors disabled:opacity-40"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                重置为空（下次全量）
+              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setEditingScanTime(false)}
+                  disabled={savingScanTime}
+                  className="px-4 py-2 text-sm font-medium text-slate-400 hover:text-white transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={saveScanTime}
+                  disabled={savingScanTime}
+                  className="btn-primary inline-flex items-center gap-2 disabled:opacity-40"
+                >
+                  {savingScanTime && <Loader2 className="w-4 h-4 animate-spin" />}
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* 执行日志 */}

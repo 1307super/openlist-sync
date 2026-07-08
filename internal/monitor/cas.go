@@ -76,7 +76,7 @@ func findVideoExt(name string) string {
 // syncMainDirCAS 对应脚本 sync_cas_filenames（主目录）。
 // 按目录分组处理：在每个目录内，把 .cas 边车文件名对齐到同目录的视频文件名。
 // since 非零时按子目录 modified 增量剪枝；为零时全量扫描。
-func (s *Service) syncMainDirCAS(mainDir string, since time.Time) {
+func (s *Service) syncMainDirCAS(mainDir string, since time.Time) stepStats {
 	skip := s.chasingDirNamesAt(mainDir)
 	var (
 		entries []remoteEntry
@@ -89,17 +89,20 @@ func (s *Service) syncMainDirCAS(mainDir string, since time.Time) {
 	}
 	if err != nil {
 		s.logf("error", "扫描主目录失败 %s: %v", mainDir, err)
-		return
+		return stepStats{failed: 1}
 	}
 
+	var stats stepStats
 	byDir := groupByDir(entries)
 	for dir, files := range byDir {
-		s.syncMainDirCASInDir(dir, files)
+		stats = stats.add(s.syncMainDirCASInDir(dir, files))
 	}
+	return stats
 }
 
 // syncMainDirCASInDir 处理单个目录内的 CAS 文件重命名。
-func (s *Service) syncMainDirCASInDir(dir string, files []remoteEntry) {
+func (s *Service) syncMainDirCASInDir(dir string, files []remoteEntry) stepStats {
+	var stats stepStats
 	// 按视频扩展名分组视频与 .cas 文件
 	videosByExt := make(map[string]map[string]string) // ext(lower) -> baseName -> fileName
 	for _, ext := range targetExtensions {
@@ -178,19 +181,22 @@ func (s *Service) syncMainDirCASInDir(dir string, files []remoteEntry) {
 		}
 
 		oldPath := joinPath(dir, ci.fileName)
+		stats.scanned++
 		if err := s.rename(oldPath, targetCASName); err != nil {
+			stats.failed++
 			s.logf("error", "CAS重命名失败（主目录）%s: %v", ci.fileName, err)
 		} else {
 			s.logf("info", "CAS重命名（主目录）: %s -> %s", ci.fileName, targetCASName)
 		}
 	}
+	return stats
 }
 
 // syncChasingDirCAS 对应脚本 process_chasing_dir_cas_files（追更目录）。
 // 在每个目录内：识别纯剧集 .cas（S01E01.mp4.cas 或 164 4K.mp4.cas）和模板 .cas，
 // 用模板的 prefix/suffix + 新剧集号构造完整名（保留原集数位数）。
 // since 非零时按子目录 modified 增量剪枝；为零时全量扫描。
-func (s *Service) syncChasingDirCAS(chasingDir string, since time.Time) {
+func (s *Service) syncChasingDirCAS(chasingDir string, since time.Time) stepStats {
 	var (
 		entries []remoteEntry
 		err     error
@@ -202,16 +208,19 @@ func (s *Service) syncChasingDirCAS(chasingDir string, since time.Time) {
 	}
 	if err != nil {
 		s.logf("error", "扫描追更目录失败 %s: %v", chasingDir, err)
-		return
+		return stepStats{failed: 1}
 	}
 
+	var stats stepStats
 	byDir := groupByDir(entries)
 	for dir, files := range byDir {
-		s.syncChasingDirCASInDir(dir, files)
+		stats = stats.add(s.syncChasingDirCASInDir(dir, files))
 	}
+	return stats
 }
 
-func (s *Service) syncChasingDirCASInDir(dir string, files []remoteEntry) {
+func (s *Service) syncChasingDirCASInDir(dir string, files []remoteEntry) stepStats {
+	var stats stepStats
 	type pureItem struct {
 		fileName    string
 		newEpisode  string
@@ -260,13 +269,13 @@ func (s *Service) syncChasingDirCASInDir(dir string, files []remoteEntry) {
 	}
 
 	if len(pureFiles) == 0 || templateFile == "" {
-		return
+		return stats
 	}
 
 	templateLower := strings.ToLower(templateFile)
 	m := casSxxExxExtractRe.FindString(templateLower)
 	if m == "" {
-		return
+		return stats
 	}
 	// 大小写不敏感地在模板中定位 SxxExx，再按其拆分前后缀。
 	oldEpisodeLower := m
@@ -305,12 +314,15 @@ func (s *Service) syncChasingDirCASInDir(dir string, files []remoteEntry) {
 		}
 
 		oldPath := joinPath(dir, pi.fileName)
+		stats.scanned++
 		if err := s.rename(oldPath, newName); err != nil {
+			stats.failed++
 			s.logf("error", "CAS重命名失败（追更目录）%s: %v", pi.fileName, err)
 		} else {
 			s.logf("info", "CAS重命名（追更目录）: %s -> %s", pi.fileName, newName)
 		}
 	}
+	return stats
 }
 
 // replaceFirstCI 大小写不敏感地替换第一个匹配子串（保留替换值的大小写）。

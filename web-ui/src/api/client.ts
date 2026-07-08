@@ -141,6 +141,8 @@ export const monitorApi = {
       "/monitor/trigger"
     ),
   status: () => request<{ running: boolean }>("GET", "/monitor/status"),
+  updateScanTime: (lastScanAt: string | null) =>
+    request<MonitorConfig>("PUT", "/monitor/scan-time", { lastScanAt }),
   logs: (page: number = 1, perPage: number = 50) =>
     request<PaginatedResponse<MonitorLog>>(
       "GET",

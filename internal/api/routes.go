@@ -48,6 +48,7 @@ func RegisterRoutes(r *gin.Engine, h *Handlers, authSecret string, staticFS fs.F
 		protected.DELETE("/monitor/dirs/:id", h.DeleteMonitorDir)
 		protected.POST("/monitor/trigger", h.TriggerMonitor)
 		protected.GET("/monitor/status", h.MonitorStatus)
+		protected.PUT("/monitor/scan-time", h.UpdateMonitorScanTime)
 		protected.GET("/monitor/logs", h.GetMonitorLogs)
 	}
 

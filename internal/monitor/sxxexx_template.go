@@ -18,7 +18,7 @@ var (
 // 把纯剧集文件名（如 "S01E01.mkv"）用同目录模板文件（含 SxxExx 的非纯文件，
 // 如 "Show.S01E01.1080P.mkv"）构造出完整命名（→ "Show.S01E01.1080P.mkv"）。
 // since 非零时按子目录 modified 增量剪枝；为零时全量扫描。
-func (s *Service) renamePureSxxExx(chasingDir string, since time.Time) {
+func (s *Service) renamePureSxxExx(chasingDir string, since time.Time) stepStats {
 	var (
 		entries []remoteEntry
 		err     error
@@ -30,9 +30,10 @@ func (s *Service) renamePureSxxExx(chasingDir string, since time.Time) {
 	}
 	if err != nil {
 		s.logf("error", "扫描追更目录失败 %s: %v", chasingDir, err)
-		return
+		return stepStats{failed: 1}
 	}
 
+	var stats stepStats
 	byDir := groupByDir(entries)
 	for dir, files := range byDir {
 		// 先在当前目录内查找一个可用模板（含 SxxExx 的非纯文件，取第一个）
@@ -75,13 +76,16 @@ func (s *Service) renamePureSxxExx(chasingDir string, since time.Time) {
 			}
 
 			oldPath := joinPath(dir, f.name)
+			stats.scanned++
 			if err := s.rename(oldPath, newName); err != nil {
+				stats.failed++
 				s.logf("error", "重命名纯SxxExx文件失败 %s: %v", f.name, err)
 			} else {
 				s.logf("info", "重命名纯SxxExx文件: %s -> %s", f.name, newName)
 			}
 		}
 	}
+	return stats
 }
 
 // containsExcludedKeyword 对应脚本 contains_excluded_keyword（EXCLUDED_KEYWORDS）。

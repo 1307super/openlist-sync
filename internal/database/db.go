@@ -71,6 +71,7 @@ var migrations = []string{
 		created_at INTEGER NOT NULL DEFAULT (unixepoch())
 	)`,
 	`CREATE INDEX IF NOT EXISTS monitor_dir_kind_idx ON monitor_dir(kind)`,
+	`ALTER TABLE monitor_config ADD COLUMN last_scan_at INTEGER`,
 	// 监控日志独立成表（不复用 sync_logs，避免外键约束冲突：
 	// sync_logs.task_id REFERENCES sync_tasks(id)，不存在 id=0 的任务）。
 	`CREATE TABLE IF NOT EXISTS monitor_logs (
