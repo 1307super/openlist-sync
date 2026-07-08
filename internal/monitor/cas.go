@@ -74,28 +74,22 @@ func findVideoExt(name string) string {
 }
 
 // syncMainDirCAS 对应脚本 sync_cas_filenames（主目录）。
-// 按目录分组处理：在每个目录内，把 .cas 边车文件名对齐到同目录的视频文件名。
-// since 非零时按子目录 modified 增量剪枝；为零时全量扫描。
-func (s *Service) syncMainDirCAS(mainDir string, since time.Time) stepStats {
-	skip := s.chasingDirNamesAt(mainDir)
-	var (
-		entries []remoteEntry
-		err     error
-	)
-	if since.IsZero() {
-		entries, err = s.walkDir(mainDir, skip)
-	} else {
-		entries, err = s.walkChanged(mainDir, since, skip)
-	}
-	if err != nil {
-		s.logf("error", "扫描主目录失败 %s: %v", mainDir, err)
-		return stepStats{failed: 1}
-	}
-
+// 在每个目录内，把 .cas 边车文件名对齐到同目录的视频文件名。
+// tree 是已扫描的目录树（由 runOnce 一次 scanTree 得到，避免重复遍历）。
+// since 非零时只处理含 modified>since 文件的目录（文件级增量）。
+func (s *Service) syncMainDirCAS(tree *dirNode, since time.Time) stepStats {
 	var stats stepStats
-	byDir := groupByDir(entries)
-	for dir, files := range byDir {
-		stats = stats.add(s.syncMainDirCASInDir(dir, files))
+	for _, node := range tree.allDirs() {
+		// 跳过扫描失败的目录
+		if node.scanErr != nil {
+			stats.failed++
+			continue
+		}
+		// 增量模式：该目录无变动文件则跳过
+		if !node.hasChanged(since) {
+			continue
+		}
+		stats = stats.add(s.syncMainDirCASInDir(node.absPath, node.files))
 	}
 	return stats
 }
@@ -195,26 +189,18 @@ func (s *Service) syncMainDirCASInDir(dir string, files []remoteEntry) stepStats
 // syncChasingDirCAS 对应脚本 process_chasing_dir_cas_files（追更目录）。
 // 在每个目录内：识别纯剧集 .cas（S01E01.mp4.cas 或 164 4K.mp4.cas）和模板 .cas，
 // 用模板的 prefix/suffix + 新剧集号构造完整名（保留原集数位数）。
-// since 非零时按子目录 modified 增量剪枝；为零时全量扫描。
-func (s *Service) syncChasingDirCAS(chasingDir string, since time.Time) stepStats {
-	var (
-		entries []remoteEntry
-		err     error
-	)
-	if since.IsZero() {
-		entries, err = s.walkDir(chasingDir, nil)
-	} else {
-		entries, err = s.walkChanged(chasingDir, since, nil)
-	}
-	if err != nil {
-		s.logf("error", "扫描追更目录失败 %s: %v", chasingDir, err)
-		return stepStats{failed: 1}
-	}
-
+// tree 是已扫描的目录树。since 非零时只处理含 modified>since 文件的目录。
+func (s *Service) syncChasingDirCAS(tree *dirNode, since time.Time) stepStats {
 	var stats stepStats
-	byDir := groupByDir(entries)
-	for dir, files := range byDir {
-		stats = stats.add(s.syncChasingDirCASInDir(dir, files))
+	for _, node := range tree.allDirs() {
+		if node.scanErr != nil {
+			stats.failed++
+			continue
+		}
+		if !node.hasChanged(since) {
+			continue
+		}
+		stats = stats.add(s.syncChasingDirCASInDir(node.absPath, node.files))
 	}
 	return stats
 }
@@ -335,10 +321,10 @@ func replaceFirstCI(s, oldLower, newStr string) string {
 	return s[:idx] + newStr + s[idx+len(oldLower):]
 }
 
-// chasingDirNamesAt 返回在 mainDir 下应被跳过的追更目录名集合。
+// chasingDirNamesAt 返回主目录根层应被跳过的追更目录名集合。
 // 脚本逻辑：若某追更目录路径包含在主目录扫描路径中，则跳过。
 // 这里简化为：把所有追更目录的 basename 收集起来，主目录根层出现这些名字则跳过。
-func (s *Service) chasingDirNamesAt(mainDir string) map[string]bool {
+func (s *Service) chasingDirNamesAt() map[string]bool {
 	names := make(map[string]bool)
 	for _, d := range s.chasingDirs {
 		base := pathBase(d)

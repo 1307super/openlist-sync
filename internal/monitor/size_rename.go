@@ -30,28 +30,28 @@ func formatSize(sizeBytes int64) string {
 
 // renameDirsWithSize 对应脚本 process_directory：遍历主目录的子目录，
 // 计算每个子目录大小并在目录名末尾追加/更新大小标签（如 "Show" → "Show 12.5GB"）。
-func (s *Service) renameDirsWithSize(mainDir string) stepStats {
-	s.logf("info", "扫描主目录更新大小标签: %s", mainDir)
+// tree 是已扫描的主目录树；子目录大小直接从树累加（totalSize），不再额外请求 API。
+// 注意：大小重命名始终全量处理（与文件 modified 无关）。
+func (s *Service) renameDirsWithSize(tree *dirNode) stepStats {
 	var stats stepStats
 
-	subs, err := s.listDirsOnly(mainDir)
-	if err != nil {
-		s.logf("error", "列出主目录子目录失败 %s: %v", mainDir, err)
-		return stepStats{failed: 1}
-	}
-
-	for _, sub := range subs {
+	// 遍历主目录根层的各子目录（size 标签只打在主目录的一级子目录上，与脚本一致）
+	for _, sub := range tree.dirs {
 		itemName := sub.name
 		if containsExcludedKeyword(itemName) {
 			continue
 		}
 
-		sizeBytes, err := s.calcDirSize(sub.absPath())
-		if err != nil {
-			stats.failed++
-			s.logf("error", "获取目录大小失败 %s: %v", sub.absPath(), err)
+		// 从已扫描的子树累加大小（不再 walk）
+		child := tree.children[itemName]
+		if child == nil {
 			continue
 		}
+		if child.scanErr != nil {
+			stats.failed++
+			continue
+		}
+		sizeBytes := child.totalSize()
 		newSizeStr := formatSize(sizeBytes)
 
 		var baseName string

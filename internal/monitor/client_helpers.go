@@ -4,8 +4,12 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"sync"
 	"time"
 )
+
+// scanConcurrency 是并发扫描子目录的 worker 数。
+const scanConcurrency = 8
 
 // remoteEntry 表示远端目录中的一个条目（文件或子目录）。
 type remoteEntry struct {
@@ -19,6 +23,173 @@ type remoteEntry struct {
 // absPath 返回该条目的绝对路径。
 func (e remoteEntry) absPath() string {
 	return joinPath(e.absDir, e.name)
+}
+
+// dirNode 表示扫描出的一个目录节点（含自身文件 + 子目录树）。
+// 一棵 dirNode 树是一次 scanTree 的产物，供一轮内所有处理函数共用，
+// 避免各处理函数重复遍历同一目录树。
+type dirNode struct {
+	absPath  string              // 该目录的绝对路径
+	files    []remoteEntry       // 该目录直接包含的文件
+	dirs     []remoteEntry       // 该目录直接包含的子目录（remoteEntry 视图）
+	children map[string]*dirNode // 子目录名 -> 节点（并发填充）
+	mu       sync.Mutex          // 保护 children 的并发写入
+	scanErr  error               // 该目录扫描失败时的错误（非 nil 表示该节点数据不完整）
+}
+
+// ensureChild 并发安全地获取或创建一个子节点。
+func (n *dirNode) ensureChild(name string) *dirNode {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.children == nil {
+		n.children = make(map[string]*dirNode)
+	}
+	if c, ok := n.children[name]; ok {
+		return c
+	}
+	c := &dirNode{absPath: joinPath(n.absPath, name)}
+	n.children[name] = c
+	return c
+}
+
+// allDirs 扁平化该节点及其所有后代目录节点（含自身），供处理函数遍历。
+func (n *dirNode) allDirs() []*dirNode {
+	var out []*dirNode
+	var walk func(node *dirNode)
+	walk = func(node *dirNode) {
+		out = append(out, node)
+		if node.children != nil {
+			for _, c := range node.children {
+				walk(c)
+			}
+		}
+	}
+	walk(n)
+	return out
+}
+
+// changedFiles 返回该目录内 modified > since 的文件。
+// since 为零值（全量模式）时返回全部文件。
+func (n *dirNode) changedFiles(since time.Time) []remoteEntry {
+	if since.IsZero() {
+		return n.files
+	}
+	var out []remoteEntry
+	for _, f := range n.files {
+		if f.modified.After(since) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// hasChanged 判断该目录是否有 modified > since 的文件（增量模式跳过判断用）。
+func (n *dirNode) hasChanged(since time.Time) bool {
+	if since.IsZero() {
+		return true
+	}
+	for _, f := range n.files {
+		if f.modified.After(since) {
+			return true
+		}
+	}
+	return false
+}
+
+// totalSize 递归累加该节点子树内所有文件的大小（字节）。
+// 直接使用已扫描的 dirTree，不再额外请求 OpenList API。
+func (n *dirNode) totalSize() int64 {
+	var total int64
+	for _, f := range n.files {
+		total += f.size
+	}
+	if n.children != nil {
+		for _, c := range n.children {
+			total += c.totalSize()
+		}
+	}
+	return total
+}
+
+// countDirs / countFiles 统计该子树的目录/文件数（用于日志）。
+func (n *dirNode) countDirs() int {
+	c := 1
+	for _, child := range n.children {
+		c += child.countDirs()
+	}
+	return c
+}
+func (n *dirNode) countFiles() int {
+	c := len(n.files)
+	for _, child := range n.children {
+		c += child.countFiles()
+	}
+	return c
+}
+
+// failedCount 统计该子树中扫描失败的节点数。
+func (n *dirNode) failedCount() int {
+	c := 0
+	if n.scanErr != nil {
+		c = 1
+	}
+	for _, child := range n.children {
+		c += child.failedCount()
+	}
+	return c
+}
+
+// scanTree 并发全量扫描一棵目录树，返回根 dirNode。
+// 用固定 worker 池（信号量容量 scanConcurrency）并发拉取子目录，
+// 不按目录 modified 剪枝（云盘目录 modified 不可靠），全部遍历到文件级。
+// skipChasingRoots：主目录扫描时跳过与追更目录同名的根层子目录。
+// 单个子目录扫描失败不中断整棵树（记 scanErr，其他子目录继续）。
+func (s *Service) scanTree(rootPath string, skipChasingRoots map[string]bool) (*dirNode, error) {
+	root := &dirNode{absPath: rootPath}
+	sem := make(chan struct{}, scanConcurrency)
+	var wg sync.WaitGroup
+
+	var scan func(node *dirNode, isRoot bool)
+	scan = func(node *dirNode, isRoot bool) {
+		defer wg.Done()
+
+		entries, err := s.listDirEntries(node.absPath)
+		if err != nil {
+			node.scanErr = err
+			s.logf("error", "扫描目录失败 %s: %v", node.absPath, err)
+			return
+		}
+
+		// 分离文件与子目录
+		for _, e := range entries {
+			if e.isDir {
+				// 主目录根层跳过追更同名子目录
+				if isRoot && skipChasingRoots != nil && skipChasingRoots[e.name] {
+					continue
+				}
+				node.dirs = append(node.dirs, e)
+			} else {
+				node.files = append(node.files, e)
+			}
+		}
+
+		// 并发扫描各子目录
+		for _, d := range node.dirs {
+			child := node.ensureChild(d.name)
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(c *dirNode) {
+				defer func() { <-sem }()
+				scan(c, false)
+			}(child)
+		}
+	}
+
+	wg.Add(1)
+	scan(root, true)
+	wg.Wait()
+
+	return root, nil
 }
 
 // joinPath 安全地拼接目录与名称，保证有且仅有一个分隔符。
@@ -71,109 +242,14 @@ func (s *Service) listDirEntries(dir string) ([]remoteEntry, error) {
 	return out, nil
 }
 
-// listDirsOnly 仅列出目录下的子目录。
-func (s *Service) listDirsOnly(dir string) ([]remoteEntry, error) {
-	entries, err := s.listDirEntries(dir)
-	if err != nil {
-		return nil, err
-	}
-	var dirs []remoteEntry
-	for _, e := range entries {
-		if e.isDir {
-			dirs = append(dirs, e)
-		}
-	}
-	return dirs, nil
-}
-
-// walkDir 深度优先递归扫描目录，返回所有条目（含子目录自身），同时返回
-// 按"目录路径"分组的映射，便于上层按目录批量处理。
-//
-// rootPath 是扫描根（不会被排除）。skipChasingRoots 用于主目录扫描时跳过
-// 与追更目录重名的子目录（对应脚本里 "跳过追更目录" 的逻辑）。
-func (s *Service) walkDir(rootPath string, skipChasingRoots map[string]bool) ([]remoteEntry, error) {
-	var all []remoteEntry
-	var walk func(current string) error
-	walk = func(current string) error {
-		entries, err := s.listDirEntries(current)
-		if err != nil {
-			return err
-		}
-		for _, e := range entries {
-			// 主目录扫描时跳过作为子目录出现的追更目录
-			if e.isDir && skipChasingRoots != nil && current == rootPath && skipChasingRoots[e.name] {
-				continue
-			}
-			all = append(all, e)
-			if e.isDir {
-				if err := walk(e.absPath()); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	if err := walk(rootPath); err != nil {
-		return nil, err
-	}
-	return all, nil
-}
-
-// walkChanged 增量递归扫描：从顶层目录开始，逐层用子目录的 modified 时间剪枝。
-//   - since 为零值时等价于全量扫描（首次运行或重启）。
-//   - 对当前目录的每个【子目录】，仅当 modified > since 才递归进去；
-//     子目录 modified 未变 → 连同它的整棵子树一起跳过（含其中的文件）。
-//   - 当前目录内的【文件】始终纳入（目录树上的变动最终会通过某层目录的 modified 变化体现）。
-//
-// 返回的条目按目录分组后，调用方可只对实际变动的目录做处理。
-func (s *Service) walkChanged(rootPath string, since time.Time, skipChasingRoots map[string]bool) ([]remoteEntry, error) {
-	var all []remoteEntry
-	skipped := 0
-	var walk func(current string, isRoot bool) error
-	walk = func(current string, isRoot bool) error {
-		entries, err := s.listDirEntries(current)
-		if err != nil {
-			return err
-		}
-		for _, e := range entries {
-			// 主目录扫描时跳过作为子目录出现的追更目录
-			if e.isDir && skipChasingRoots != nil && isRoot && skipChasingRoots[e.name] {
-				continue
-			}
-			if e.isDir {
-				// 增量剪枝：子目录 modified 未超过基准时间则整棵跳过。
-				// 根目录本身总是处理（isRoot 时无条件进入）。
-				if !isRoot && !since.IsZero() && !e.modified.After(since) {
-					skipped++
-					continue
-				}
-				all = append(all, e)
-				if err := walk(e.absPath(), false); err != nil {
-					return err
-				}
-			} else {
-				all = append(all, e)
-			}
-		}
-		return nil
-	}
-	if err := walk(rootPath, true); err != nil {
-		return nil, err
-	}
-	if skipped > 0 && !since.IsZero() {
-		s.logf("info", "增量扫描 %s：跳过 %d 个未变动的子目录", rootPath, skipped)
-	}
-	return all, nil
-}
-
 // parseModified 解析 openlist 返回的 modified 字段（RFC3339）。
 // 解析失败返回零值（调用方按零值=全量处理，安全）。
-func parseModified(s string) time.Time {
-	if s == "" {
+func parseModified(v string) time.Time {
+	if v == "" {
 		return time.Time{}
 	}
 	// openlist 通常返回 RFC3339（带时区），先按此解析
-	t, err := time.Parse(time.RFC3339, s)
+	t, err := time.Parse(time.RFC3339, v)
 	if err == nil {
 		return t
 	}
@@ -184,35 +260,11 @@ func parseModified(s string) time.Time {
 		"2006-01-02T15:04:05",
 	}
 	for _, f := range formats {
-		if t, err := time.Parse(f, s); err == nil {
+		if t, err := time.Parse(f, v); err == nil {
 			return t
 		}
 	}
 	return time.Time{}
-}
-
-// groupByDir 把扁平条目按所在目录分组。
-func groupByDir(entries []remoteEntry) map[string][]remoteEntry {
-	m := make(map[string][]remoteEntry)
-	for _, e := range entries {
-		m[e.absDir] = append(m[e.absDir], e)
-	}
-	return m
-}
-
-// calcDirSize 递归累加目录下所有文件的大小（字节）。
-func (s *Service) calcDirSize(dir string) (int64, error) {
-	entries, err := s.walkDir(dir, nil)
-	if err != nil {
-		return 0, err
-	}
-	var total int64
-	for _, e := range entries {
-		if !e.isDir {
-			total += e.size
-		}
-	}
-	return total, nil
 }
 
 // rename 调用 OpenList 重命名（filePath 为绝对路径，newName 为新文件名）。

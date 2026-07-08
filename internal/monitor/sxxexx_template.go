@@ -17,31 +17,26 @@ var (
 // renamePureSxxExx 对应脚本 auto_rename_pure_sxxexx_files：在追更目录中，
 // 把纯剧集文件名（如 "S01E01.mkv"）用同目录模板文件（含 SxxExx 的非纯文件，
 // 如 "Show.S01E01.1080P.mkv"）构造出完整命名（→ "Show.S01E01.1080P.mkv"）。
-// since 非零时按子目录 modified 增量剪枝；为零时全量扫描。
-func (s *Service) renamePureSxxExx(chasingDir string, since time.Time) stepStats {
-	var (
-		entries []remoteEntry
-		err     error
-	)
-	if since.IsZero() {
-		entries, err = s.walkDir(chasingDir, nil)
-	} else {
-		entries, err = s.walkChanged(chasingDir, since, nil)
-	}
-	if err != nil {
-		s.logf("error", "扫描追更目录失败 %s: %v", chasingDir, err)
-		return stepStats{failed: 1}
-	}
-
+// renamePureSxxExx 对应脚本 auto_rename_pure_sxxexx_files：在追更目录中，
+// 把纯剧集文件名（如 "S01E01.mkv"）用同目录模板文件（含 SxxExx 的非纯文件，
+// 如 "Show.S01E01.1080P.mkv"）构造出完整命名（→ "Show.S01E01.1080P.mkv"）。
+// tree 是已扫描的目录树。since 非零时只处理含 modified>since 文件的目录。
+func (s *Service) renamePureSxxExx(tree *dirNode, since time.Time) stepStats {
 	var stats stepStats
-	byDir := groupByDir(entries)
-	for dir, files := range byDir {
+	for _, node := range tree.allDirs() {
+		if node.scanErr != nil {
+			stats.failed++
+			continue
+		}
+		// 增量模式：该目录无变动文件则跳过
+		if !node.hasChanged(since) {
+			continue
+		}
+		files := node.files
+
 		// 先在当前目录内查找一个可用模板（含 SxxExx 的非纯文件，取第一个）
 		var template string
 		for _, f := range files {
-			if f.isDir {
-				continue
-			}
 			if targetRenamePattern.MatchString(f.name) {
 				continue
 			}
@@ -61,9 +56,6 @@ func (s *Service) renamePureSxxExx(chasingDir string, since time.Time) stepStats
 		}
 
 		for _, f := range files {
-			if f.isDir {
-				continue
-			}
 			m := targetRenamePattern.FindStringSubmatch(f.name)
 			if m == nil {
 				continue
@@ -75,7 +67,7 @@ func (s *Service) renamePureSxxExx(chasingDir string, since time.Time) stepStats
 				continue
 			}
 
-			oldPath := joinPath(dir, f.name)
+			oldPath := joinPath(node.absPath, f.name)
 			stats.scanned++
 			if err := s.rename(oldPath, newName); err != nil {
 				stats.failed++

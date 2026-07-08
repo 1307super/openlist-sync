@@ -137,11 +137,12 @@ func (s *Service) runSafe(forceFull bool) {
 	s.runOnce(forceFull)
 }
 
-// runOnce 是统一的处理编排。forceFull=true 时全量扫描。
-// 增量模式（forceFull=false）：以 lastScanAt 为基准，只扫描有变动的目录子树；
-// 全量模式（forceFull=true）：扫描整棵目录树（手动触发、首次启动）。
-// 关键：只有当本轮无失败时才推进增量基准 lastScanAt；有失败则保持基准不变，
-// 下轮自动重试漏处理的目录。
+// runOnce 是统一的处理编排。forceFull=true 时全量处理。
+// 增量模式（forceFull=false）：扫描全量到文件级，但只处理含 file.modified>since 的目录。
+// 全量模式（forceFull=true）：处理整棵树所有文件（手动触发、首次启动）。
+//
+// 关键优化：对每个监控目录只 scanTree 一次（并发 8），后续所有处理函数共用该结果，
+// 不再重复遍历。只有当本轮无失败时才推进增量基准 lastScanAt。
 func (s *Service) runOnce(forceFull bool) {
 	if err := s.loadDirs(); err != nil {
 		log.Printf("[monitor] load dirs: %v", err)
@@ -150,7 +151,7 @@ func (s *Service) runOnce(forceFull bool) {
 		return
 	}
 
-	// 计算本次扫描基准
+	// 计算本次扫描基准（文件级增量判定）
 	var since time.Time
 	mode := "增量"
 	if forceFull || s.lastScanAt.IsZero() {
@@ -167,20 +168,68 @@ func (s *Service) runOnce(forceFull bool) {
 	start := time.Now()
 	s.logf("info", "监控处理周期开始 [%s]：主目录 %d，追更目录 %d", mode, len(s.mainDirs), len(s.chasingDirs))
 
+	// === 一次性并发扫描所有监控目录（每个目录树只扫一次） ===
+	scanStart := time.Now()
+	// 主目录扫描时跳过追更同名子目录
+	skipMap := s.chasingDirNamesAt()
+
+	mainTrees := make([]*dirNode, len(s.mainDirs))
+	for i, d := range s.mainDirs {
+		tree, _ := s.scanTree(d, skipMap)
+		mainTrees[i] = tree
+	}
+	chasingTrees := make([]*dirNode, len(s.chasingDirs))
+	for i, d := range s.chasingDirs {
+		tree, _ := s.scanTree(d, nil)
+		chasingTrees[i] = tree
+	}
+
+	// 统计扫描结果
+	var totalDirs, totalFiles, scanFailed int
+	for _, t := range mainTrees {
+		if t != nil {
+			totalDirs += t.countDirs()
+			totalFiles += t.countFiles()
+			scanFailed += t.failedCount()
+		}
+	}
+	for _, t := range chasingTrees {
+		if t != nil {
+			totalDirs += t.countDirs()
+			totalFiles += t.countFiles()
+			scanFailed += t.failedCount()
+		}
+	}
+	scanDur := time.Since(scanStart).Round(time.Millisecond)
+	s.logf("info", "扫描完成：目录 %d，文件 %d，扫描失败 %d，耗时 %s",
+		totalDirs, totalFiles, scanFailed, scanDur)
+
 	var total stepStats
+	if scanFailed > 0 {
+		// 扫描有失败：计入统计，但不中断处理（已扫到的部分仍处理）
+		total.failed += scanFailed
+	}
+
+	// === 用同一份扫描结果依次跑各处理函数 ===
 	// 1. 主目录 CAS 同步
-	for _, d := range s.mainDirs {
-		total = total.add(s.syncMainDirCAS(d, since))
+	for _, t := range mainTrees {
+		if t != nil {
+			total = total.add(s.syncMainDirCAS(t, since))
+		}
 	}
 	// 2. 追更目录 CAS 同步
-	for _, d := range s.chasingDirs {
-		total = total.add(s.syncChasingDirCAS(d, since))
+	for _, t := range chasingTrees {
+		if t != nil {
+			total = total.add(s.syncChasingDirCAS(t, since))
+		}
 	}
 	// 3. 目录大小重命名（独立 3 分钟节流，用真实时间戳判断）
 	if s.lastSizeAt.IsZero() || time.Since(s.lastSizeAt) >= sizeInterval {
 		s.logf("info", "执行目录大小重命名（距上次 %s）", sinceOrDash(s.lastSizeAt))
-		for _, d := range s.mainDirs {
-			total = total.add(s.renameDirsWithSize(d))
+		for _, t := range mainTrees {
+			if t != nil {
+				total = total.add(s.renameDirsWithSize(t))
+			}
 		}
 		s.lastSizeAt = time.Now()
 	} else {
@@ -188,15 +237,21 @@ func (s *Service) runOnce(forceFull bool) {
 			time.Since(s.lastSizeAt).Round(time.Second), sizeInterval)
 	}
 	// 4. 追更目录纯 SxxExx 模板重命名
-	for _, d := range s.chasingDirs {
-		total = total.add(s.renamePureSxxExx(d, since))
+	for _, t := range chasingTrees {
+		if t != nil {
+			total = total.add(s.renamePureSxxExx(t, since))
+		}
 	}
 	// 5. HiveWeb 标签（主目录 + 追更目录，与脚本 CHASING_DIRS_HIVEWEB_FULL 一致）
-	for _, d := range s.mainDirs {
-		total = total.add(s.addHiveWebTag(d, since))
+	for _, t := range mainTrees {
+		if t != nil {
+			total = total.add(s.addHiveWebTag(t, since))
+		}
 	}
-	for _, d := range s.chasingDirs {
-		total = total.add(s.addHiveWebTag(d, since))
+	for _, t := range chasingTrees {
+		if t != nil {
+			total = total.add(s.addHiveWebTag(t, since))
+		}
 	}
 
 	dur := time.Since(start).Round(time.Millisecond)
