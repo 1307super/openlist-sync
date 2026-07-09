@@ -177,8 +177,10 @@ func (s *Service) scanTree(rootPath string, skipChasingRoots map[string]bool) (*
 		for _, d := range node.dirs {
 			child := node.ensureChild(d.name)
 			wg.Add(1)
-			sem <- struct{}{}
 			go func(c *dirNode) {
+				// 在 goroutine 内部获取信号量，避免主 goroutine 在 sem<- 阻塞
+				// 导致已启动的 goroutine 无法释放槽位而产生死锁
+				sem <- struct{}{}
 				defer func() { <-sem }()
 				scan(c, false)
 			}(child)
