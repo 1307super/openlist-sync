@@ -34,7 +34,6 @@ func formatSize(sizeBytes int64) string {
 // 注意：大小重命名始终全量处理（与文件 modified 无关）。
 func (s *Service) renameDirsWithSize(tree *dirNode) stepStats {
 	var stats stepStats
-	s.logf("info", "[诊断] renameDirsWithSize: tree.dirs=%d tree.children=%d", len(tree.dirs), len(tree.children))
 
 	// 遍历主目录根层的各子目录（size 标签只打在主目录的一级子目录上，与脚本一致）
 	for _, sub := range tree.dirs {
@@ -49,7 +48,7 @@ func (s *Service) renameDirsWithSize(tree *dirNode) stepStats {
 			continue
 		}
 		if child.scanErr != nil {
-			stats.failed++
+			stats.scanFail++
 			continue
 		}
 		sizeBytes := child.totalSize()
@@ -69,7 +68,7 @@ func (s *Service) renameDirsWithSize(tree *dirNode) stepStats {
 
 		stats.scanned++
 		if err := s.rename(sub.absPath(), newDirName); err != nil {
-			stats.failed++
+			stats.renameFail++
 			s.logf("error", "重命名目录失败 %s: %v", itemName, err)
 		} else {
 			s.logf("info", "目录大小更新: %s -> %s", itemName, newDirName)

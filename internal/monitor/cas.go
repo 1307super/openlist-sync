@@ -82,7 +82,7 @@ func (s *Service) syncMainDirCAS(tree *dirNode, since time.Time) stepStats {
 	for _, node := range tree.allDirs() {
 		// 跳过扫描失败的目录
 		if node.scanErr != nil {
-			stats.failed++
+			stats.scanFail++
 			continue
 		}
 		// 增量模式：该目录无变动文件则跳过
@@ -177,7 +177,7 @@ func (s *Service) syncMainDirCASInDir(dir string, files []remoteEntry) stepStats
 		oldPath := joinPath(dir, ci.fileName)
 		stats.scanned++
 		if err := s.rename(oldPath, targetCASName); err != nil {
-			stats.failed++
+			stats.renameFail++
 			s.logf("error", "CAS重命名失败（主目录）%s: %v", ci.fileName, err)
 		} else {
 			s.logf("info", "CAS重命名（主目录）: %s -> %s", ci.fileName, targetCASName)
@@ -194,7 +194,7 @@ func (s *Service) syncChasingDirCAS(tree *dirNode, since time.Time) stepStats {
 	var stats stepStats
 	for _, node := range tree.allDirs() {
 		if node.scanErr != nil {
-			stats.failed++
+			stats.scanFail++
 			continue
 		}
 		if !node.hasChanged(since) {
@@ -302,7 +302,7 @@ func (s *Service) syncChasingDirCASInDir(dir string, files []remoteEntry) stepSt
 		oldPath := joinPath(dir, pi.fileName)
 		stats.scanned++
 		if err := s.rename(oldPath, newName); err != nil {
-			stats.failed++
+			stats.renameFail++
 			s.logf("error", "CAS重命名失败（追更目录）%s: %v", pi.fileName, err)
 		} else {
 			s.logf("info", "CAS重命名（追更目录）: %s -> %s", pi.fileName, newName)

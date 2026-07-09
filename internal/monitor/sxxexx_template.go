@@ -25,7 +25,7 @@ func (s *Service) renamePureSxxExx(tree *dirNode, since time.Time) stepStats {
 	var stats stepStats
 	for _, node := range tree.allDirs() {
 		if node.scanErr != nil {
-			stats.failed++
+			stats.scanFail++
 			continue
 		}
 		// 增量模式：该目录无变动文件则跳过
@@ -70,7 +70,7 @@ func (s *Service) renamePureSxxExx(tree *dirNode, since time.Time) stepStats {
 			oldPath := joinPath(node.absPath, f.name)
 			stats.scanned++
 			if err := s.rename(oldPath, newName); err != nil {
-				stats.failed++
+				stats.renameFail++
 				s.logf("error", "重命名纯SxxExx文件失败 %s: %v", f.name, err)
 			} else {
 				s.logf("info", "重命名纯SxxExx文件: %s -> %s", f.name, newName)

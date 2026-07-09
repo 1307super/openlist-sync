@@ -18,15 +18,21 @@ const sizeInterval = 3 * time.Minute
 // logCleanInterval 是自动清理日志的周期：每天清空一次 monitor_logs 与 sync_logs。
 const logCleanInterval = 24 * time.Hour
 
-// stepStats 是单个处理步骤的统计。failed > 0 表示该步有失败，
-// runOnce 据此决定是否推进增量扫描基准。
+// stepStats 是单个处理步骤的统计。
+// scanFail 是扫描失败（网络异常等，可重试，不推进增量基准）；
+// renameFail 是重命名失败（文件已存在/源不存在等业务冲突，不可重试，不阻止推进基准）。
 type stepStats struct {
-	scanned int // 处理/扫描的条目数
-	failed  int // 失败数（扫描失败 + 重命名失败）
+	scanned    int // 处理/扫描的条目数
+	scanFail   int // 扫描失败数（可重试）
+	renameFail int // 重命名失败数（不可重试）
 }
 
 func (a stepStats) add(b stepStats) stepStats {
-	return stepStats{scanned: a.scanned + b.scanned, failed: a.failed + b.failed}
+	return stepStats{
+		scanned:    a.scanned + b.scanned,
+		scanFail:   a.scanFail + b.scanFail,
+		renameFail: a.renameFail + b.renameFail,
+	}
 }
 
 // Service 是监控处理服务：周期性对主目录/追更目录执行 CAS 同步、
@@ -257,18 +263,11 @@ func (s *Service) runOnce(forceFull bool) {
 	scanDur := time.Since(scanStart).Round(time.Millisecond)
 	s.logf("info", "扫描完成：目录 %d，文件 %d，扫描失败 %d，耗时 %s",
 		totalDirs, totalFiles, scanFailed, scanDur)
-	// 诊断：打印每个主目录树根层的子目录数与文件数
-	for i, t := range mainTrees {
-		if t != nil {
-			s.logf("info", "[诊断] 主目录[%d] %s：根层子目录 %d，根层文件 %d，children %d",
-				i, t.absPath, len(t.dirs), len(t.files), len(t.children))
-		}
-	}
 
 	var total stepStats
 	if scanFailed > 0 {
 		// 扫描有失败：计入统计，但不中断处理（已扫到的部分仍处理）
-		total.failed += scanFailed
+		total.scanFail += scanFailed
 	}
 
 	// === 用同一份扫描结果依次跑各处理函数 ===
@@ -317,20 +316,26 @@ func (s *Service) runOnce(forceFull bool) {
 
 	dur := time.Since(start).Round(time.Millisecond)
 
-	// 关键：失败不推进基准，下轮自动重试
-	if total.failed > 0 {
-		s.logf("warn", "监控处理周期完成（耗时 %s）：处理 %d 项，失败 %d 项；增量基准保持 %s，下轮将重试",
-			dur, total.scanned, total.failed, formatScanAt(s.lastScanAt))
+	// 只有扫描失败（可重试）才不推进基准；重命名失败（不可重试）不阻止推进。
+	if total.scanFail > 0 {
+		s.logf("warn", "监控处理周期完成（耗时 %s）：处理 %d 项，扫描失败 %d 项，重命名失败 %d 项；增量基准保持 %s，下轮将重试",
+			dur, total.scanned, total.scanFail, total.renameFail, formatScanAt(s.lastScanAt))
 		_ = database.UpdateMonitorRunResult(s.db, "error")
 		return
 	}
 
-	// 全部成功：推进增量基准并持久化
+	// 无扫描失败：推进增量基准并持久化（即使有重命名失败也推进，因为不可重试）
 	s.lastScanAt = time.Now()
 	_ = database.UpdateMonitorLastScanAt(s.db, s.lastScanAt.Unix())
-	s.logf("info", "监控处理周期完成（耗时 %s）：处理 %d 项，全部成功；增量基准更新为 %s",
-		dur, total.scanned, formatScanAt(s.lastScanAt))
-	_ = database.UpdateMonitorRunResult(s.db, "idle")
+	if total.renameFail > 0 {
+		s.logf("warn", "监控处理周期完成（耗时 %s）：处理 %d 项，重命名失败 %d 项（不可重试，已忽略）；增量基准更新为 %s",
+			dur, total.scanned, total.renameFail, formatScanAt(s.lastScanAt))
+		_ = database.UpdateMonitorRunResult(s.db, "error")
+	} else {
+		s.logf("info", "监控处理周期完成（耗时 %s）：处理 %d 项，全部成功；增量基准更新为 %s",
+			dur, total.scanned, formatScanAt(s.lastScanAt))
+		_ = database.UpdateMonitorRunResult(s.db, "idle")
+	}
 }
 
 func sinceOrDash(t time.Time) string {

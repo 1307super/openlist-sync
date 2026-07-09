@@ -13,7 +13,7 @@ func (s *Service) addHiveWebTag(tree *dirNode, since time.Time) stepStats {
 	var stats stepStats
 	for _, node := range tree.allDirs() {
 		if node.scanErr != nil {
-			stats.failed++
+			stats.scanFail++
 			continue
 		}
 		// 脚本：if 'hiveweb' not in root.lower(): continue（root 为文件所在目录）
@@ -46,7 +46,7 @@ func (s *Service) addHiveWebTag(tree *dirNode, since time.Time) stepStats {
 			oldPath := joinPath(node.absPath, f.name)
 			stats.scanned++
 			if err := s.rename(oldPath, newName); err != nil {
-				stats.failed++
+				stats.renameFail++
 				s.logf("error", "添加HiveWeb标签失败 %s: %v", f.name, err)
 			} else {
 				s.logf("info", "添加HiveWeb标签: %s", f.name)
