@@ -13,6 +13,8 @@ import {
 interface MonitorLogViewerProps {
   /** 运行中时自动刷新（轮询） */
   isRunning?: boolean;
+  /** 外部触发刷新（如清空日志后改变此值会重新拉取） */
+  refreshKey?: number;
 }
 
 const PER_PAGE = 30;
@@ -31,7 +33,7 @@ const levelDots: Record<string, string> = {
 
 type LevelFilter = "all" | "info" | "warn" | "error";
 
-export default function MonitorLogViewer({ isRunning }: MonitorLogViewerProps) {
+export default function MonitorLogViewer({ isRunning, refreshKey = 0 }: MonitorLogViewerProps) {
   const [logs, setLogs] = useState<MonitorLog[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -57,6 +59,14 @@ export default function MonitorLogViewer({ isRunning }: MonitorLogViewerProps) {
   useEffect(() => {
     fetchLogs();
   }, [fetchLogs]);
+
+  // 外部触发刷新（清空日志后）
+  useEffect(() => {
+    if (refreshKey === 0) return;
+    setLoading(true);
+    setPage(1);
+    fetchLogs();
+  }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 运行中自动轮询
   useEffect(() => {

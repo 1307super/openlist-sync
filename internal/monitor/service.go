@@ -15,6 +15,9 @@ import (
 // 每 3 分钟执行一次（用真实时间戳判断，与扫描间隔解耦）。
 const sizeInterval = 3 * time.Minute
 
+// logCleanInterval 是自动清理日志的周期：每天清空一次 monitor_logs 与 sync_logs。
+const logCleanInterval = 24 * time.Hour
+
 // stepStats 是单个处理步骤的统计。failed > 0 表示该步有失败，
 // runOnce 据此决定是否推进增量扫描基准。
 type stepStats struct {
@@ -44,12 +47,59 @@ type Service struct {
 	mu      stdsync.Mutex
 	running bool
 
-	stopCh chan struct{}
+	stopCh    chan struct{} // 监控处理调度的停止信号
+	logStopCh chan struct{} // 日志清理调度的停止信号（独立于监控开关）
 }
 
-// NewService 创建监控处理服务。不会自动启动。
+// NewService 创建监控处理服务。不会自动启动监控调度，但会启动日志清理调度
+// （日志清理独立于监控开关，始终运行）。
 func NewService(db *sql.DB, client *openlist.Client) *Service {
-	return &Service{db: db, client: client}
+	s := &Service{db: db, client: client}
+	s.startLogCleaner()
+	return s
+}
+
+// startLogCleaner 启动日志清理调度：每 logCleanInterval 清空一次全部日志。
+// 独立于监控服务的开关，进程启动即运行。
+func (s *Service) startLogCleaner() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.logStopCh != nil {
+		return
+	}
+	s.logStopCh = make(chan struct{})
+	go s.logCleanLoop(s.logStopCh)
+	log.Printf("[monitor] log cleaner started, clears all logs every %s", logCleanInterval)
+}
+
+func (s *Service) logCleanLoop(stopCh chan struct{}) {
+	ticker := time.NewTicker(logCleanInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.cleanAllLogs()
+		case <-stopCh:
+			return
+		}
+	}
+}
+
+// cleanAllLogs 清空 monitor_logs 与 sync_logs 两张表，并记录一条清理日志。
+func (s *Service) cleanAllLogs() {
+	if err := database.ClearMonitorLogs(s.db); err != nil {
+		log.Printf("[monitor] clean monitor_logs: %v", err)
+		return
+	}
+	if err := database.ClearAllLogs(s.db); err != nil {
+		log.Printf("[monitor] clean sync_logs: %v", err)
+		return
+	}
+	// 清空后写一条日志记录本次清理（用 monitor_logs，避免被自己的清空冲掉）
+	if err := database.InsertMonitorLog(s.db, "info", "定时清理：已清空全部日志", nil); err != nil {
+		log.Printf("[monitor] log clean result: %v", err)
+	}
+	log.Printf("[monitor] all logs cleared by scheduled cleaner")
 }
 
 // Start 启动周期调度。重复调用安全（已运行则忽略）。
@@ -82,13 +132,17 @@ func (s *Service) Start() {
 	log.Printf("[monitor] service started, interval=%ds, lastScanAt=%s", interval, formatScanAt(s.lastScanAt))
 }
 
-// Stop 停止周期调度。
+// Stop 停止周期调度与日志清理调度。
 func (s *Service) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stopCh != nil {
 		close(s.stopCh)
 		s.stopCh = nil
+	}
+	if s.logStopCh != nil {
+		close(s.logStopCh)
+		s.logStopCh = nil
 	}
 }
 

@@ -305,8 +305,13 @@ func (h *Handlers) DeleteTaskJob(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
+// ClearLogs 清空所有日志（同步任务日志 sync_logs + 监控日志 monitor_logs）。
 func (h *Handlers) ClearLogs(c *gin.Context) {
 	if err := database.ClearAllLogs(h.db); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if err := database.ClearMonitorLogs(h.db); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
@@ -612,6 +617,9 @@ func (h *Handlers) UpdateMonitorScanTime(c *gin.Context) {
 		database.InsertMonitorLog(h.db, "info",
 			fmt.Sprintf("手动修改增量扫描基准为 %s", t.Format("2006-01-02 15:04:05")), nil)
 	}
+
+	// 修改基准后自动触发一轮处理，让用户立即看到效果
+	h.monitor.TriggerOnce()
 
 	cfg, _ := database.GetMonitorConfig(h.db)
 	c.JSON(http.StatusOK, cfg.ToJSON())

@@ -14,7 +14,7 @@ import {
   Pencil,
   RotateCcw,
 } from "lucide-react";
-import { monitorApi } from "../api/client";
+import { monitorApi, syncApi } from "../api/client";
 import type { MonitorConfig, MonitorDir } from "../types";
 import DirectoryPicker from "../components/DirectoryPicker";
 import MonitorLogViewer from "../components/MonitorLogViewer";
@@ -35,6 +35,8 @@ export default function MonitorPage() {
   const [editingScanTime, setEditingScanTime] = useState(false);
   const [scanTimeDraft, setScanTimeDraft] = useState("");
   const [savingScanTime, setSavingScanTime] = useState(false);
+  const [logRefreshKey, setLogRefreshKey] = useState(0);
+  const [clearingLogs, setClearingLogs] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -161,6 +163,19 @@ export default function MonitorPage() {
       setError(err instanceof Error ? err.message : "重置失败");
     } finally {
       setSavingScanTime(false);
+    }
+  }, []);
+
+  const clearAllLogs = useCallback(async () => {
+    if (!confirm("确定清空所有日志？包括监控日志和同步任务日志，此操作不可撤销。")) return;
+    try {
+      setClearingLogs(true);
+      await syncApi.clearLogs();
+      setLogRefreshKey((k) => k + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "清空失败");
+    } finally {
+      setClearingLogs(false);
     }
   }, []);
 
@@ -452,14 +467,26 @@ export default function MonitorPage() {
             执行日志
           </h2>
           {running && (
-            <span className="ml-auto inline-flex items-center gap-1.5 text-[11px] text-emerald-400">
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-400">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               实时刷新中
             </span>
           )}
+          <button
+            onClick={clearAllLogs}
+            disabled={clearingLogs}
+            className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border border-rose-500/20 rounded-lg transition-colors disabled:opacity-40"
+          >
+            {clearingLogs ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="w-3.5 h-3.5" />
+            )}
+            清空全部日志
+          </button>
         </div>
         <div className="p-4">
-          <MonitorLogViewer isRunning={running} />
+          <MonitorLogViewer isRunning={running} refreshKey={logRefreshKey} />
         </div>
       </section>
     </div>
