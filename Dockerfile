@@ -16,6 +16,7 @@ RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o /openlist-sync ./cmd
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata
+ENV TZ=Asia/Shanghai
 COPY --from=backend /openlist-sync /usr/local/bin/openlist-sync
 ENV PORT=3000 DATA_DIR=/data
 EXPOSE 3000

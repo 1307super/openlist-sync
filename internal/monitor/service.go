@@ -257,6 +257,13 @@ func (s *Service) runOnce(forceFull bool) {
 	scanDur := time.Since(scanStart).Round(time.Millisecond)
 	s.logf("info", "扫描完成：目录 %d，文件 %d，扫描失败 %d，耗时 %s",
 		totalDirs, totalFiles, scanFailed, scanDur)
+	// 诊断：打印每个主目录树根层的子目录数与文件数
+	for i, t := range mainTrees {
+		if t != nil {
+			s.logf("info", "[诊断] 主目录[%d] %s：根层子目录 %d，根层文件 %d，children %d",
+				i, t.absPath, len(t.dirs), len(t.files), len(t.children))
+		}
+	}
 
 	var total stepStats
 	if scanFailed > 0 {
